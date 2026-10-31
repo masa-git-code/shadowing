@@ -1,0 +1,11 @@
+{
+  "name": "shadowing",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "catalog": "node tools/update-catalog.mjs"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
+  }
+}

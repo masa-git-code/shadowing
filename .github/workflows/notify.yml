@@ -1,0 +1,20 @@
+name: Daily review reminder
+# 毎朝 9:00 JST（0:00 UTC）に復習の通知を送る。GitHubの混み具合で数十分遅れることがある。
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: node tools/notify.mjs
+        env:
+          SHADOWING_PASSWORD: ${{ secrets.SHADOWING_PASSWORD }}
