@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Shadowing">
+<meta name="theme-color" content="#f7f7f8">
+<meta name="robots" content="noindex">
+<title>Shadowing</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="topbar">
+  <button id="backBtn" class="icon-btn" aria-label="戻る" hidden>‹</button>
+  <h1 id="title">Shadowing</h1>
+</header>
+<main id="main"></main>
+<nav id="tabbar" hidden>
+  <a href="#/chloe" data-tab="chloe"><span class="ti">🎻</span><span>Chloe Chua</span></a>
+  <a href="#/ted" data-tab="ted"><span class="ti">🎤</span><span>TED</span></a>
+  <a href="#/vocab" data-tab="vocab"><span class="ti">📒</span><span>単語帳</span><b id="dueBadge" hidden></b></a>
+  <a href="#/settings" data-tab="settings"><span class="ti">⚙️</span><span>設定</span></a>
+</nav>
+<div id="modal" hidden><div class="sheet" id="modalBody"></div></div>
+<div id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "_note": "動画一覧を自動で集めるチャンネル。filter はタイトルに含まれる語（大文字小文字は区別しない）。fromVideo はその動画のチャンネルを使う。",
+  "channels": [
+    { "menu": "chloe", "name": "Chloe Chua", "url": "https://www.youtube.com/c/ChloeChuaviolinist" },
+    { "menu": "chloe", "name": "Singapore Symphony Orchestra", "fromVideo": "opzZjIAx8rM", "filter": "chloe" },
+    { "menu": "chloe", "name": "TwoSet Violin", "url": "https://www.youtube.com/@twosetviolin", "filter": "chloe" },
+    { "menu": "ted", "name": "TED", "channelId": "UCAuUUnT6oDeKwE6v1NGQxug" }
+  ],
+  "keepPendingPerMenu": 40
+}
