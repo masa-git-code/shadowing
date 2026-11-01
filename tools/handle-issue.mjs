@@ -17,21 +17,30 @@ async function main() {
   const now = new Date().toISOString();
 
   if (msg.type === 'subscribe') {
+    if (!msg.subscription?.endpoint) { out('result', 'invalid'); return; }
     await writeSealed(key, 'push.enc.json', { subscription: msg.subscription, at: now });
     out('result', 'subscribed'); return;
   }
   const cat = await readSealed(key, 'catalog.enc.json', { v: 1, videos: [] });
+  const validId = /^[\w-]{11}$/.test(msg.youtubeId || '');
   if (msg.type === 'request') {
     const v = cat.videos.find(x => x.youtubeId === msg.youtubeId);
-    if (!v) { out('result', 'notfound'); return; }
-    if (v.status !== 'ready') { v.status = 'requested'; v.requestedAt = now; }
+    if (!v) {
+      // 一覧から消えた動画でも、依頼は受け付ける
+      if (!validId) { out('result', 'notfound'); return; }
+      cat.videos.unshift({ youtubeId: msg.youtubeId, menu: msg.menu === 'ted' ? 'ted' : 'chloe', title: '', status: 'requested', addedBy: 'user', addedAt: now, requestedAt: now });
+    } else if (v.status !== 'ready') { v.status = 'requested'; v.requestedAt = now; }
   } else if (msg.type === 'add') {
-    if (!/^[\w-]{11}$/.test(msg.youtubeId || '')) { out('result', 'invalid'); return; }
-    if (!cat.videos.find(x => x.youtubeId === msg.youtubeId)) {
-      cat.videos.unshift({ youtubeId: msg.youtubeId, menu: msg.menu === 'ted' ? 'ted' : 'chloe', title: '', status: msg.request ? 'requested' : 'pending', addedAt: now, requestedAt: msg.request ? now : undefined });
+    if (!validId) { out('result', 'invalid'); return; }
+    const v = cat.videos.find(x => x.youtubeId === msg.youtubeId);
+    if (!v) {
+      cat.videos.unshift({ youtubeId: msg.youtubeId, menu: msg.menu === 'ted' ? 'ted' : 'chloe', title: '', status: msg.request ? 'requested' : 'pending', addedBy: 'user', addedAt: now, requestedAt: msg.request ? now : undefined });
+    } else {
+      v.addedBy ||= 'user';
+      if (msg.request && v.status !== 'ready') { v.status = 'requested'; v.requestedAt = now; }
     }
   } else { out('result', 'invalid'); return; }
   await writeSealed(key, 'catalog.enc.json', cat);
   out('result', msg.type);
 }
-main().catch(e => { console.error(e.message); out('result', 'error'); });
+main().catch(e => { console.error(e.message); out('result', 'error'); process.exitCode = 1; });

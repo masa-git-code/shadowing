@@ -4,6 +4,9 @@
 import fs from 'node:fs';
 import { loadMeta, readSealed, writeSealed, randomB64 } from './lib/crypto.mjs';
 const pack = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (!Array.isArray(pack.items) || !pack.items.length || pack.items.some(it => !it.phrase)) {
+  console.error('items（phrase のある表現の配列）が必要です'); process.exit(1);
+}
 const { key } = await loadMeta();
 const inbox = await readSealed(key, 'inbox.enc.json', { packs: [] });
 inbox.packs.push({ id: randomB64(9).replace(/[+/=]/g, ''), createdAt: new Date().toISOString(), items: pack.items });

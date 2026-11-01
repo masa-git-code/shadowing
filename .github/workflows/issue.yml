@@ -6,9 +6,7 @@ on:
 permissions:
   contents: write
   issues: write
-concurrency:
-  group: data
-  cancel-in-progress: false
+# 同時に来た依頼が取り消されないよう、concurrency は使わない（保存は下で何度かやり直す）
 jobs:
   handle:
     # リポジトリの持ち主が作った依頼だけを処理する
@@ -16,23 +14,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      # 他の処理と同時に main が変わっても依頼を失わないよう、最新の main でやり直す
       - id: h
-        run: node tools/handle-issue.mjs
         env:
           SHADOWING_PASSWORD: ${{ secrets.SHADOWING_PASSWORD }}
-      - name: Commit
         run: |
           git config user.name "shadowing-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data
-          if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
-          git commit -m "Handle app request"
-          git pull --rebase origin main
-          git push origin HEAD:main
+          RESULT=pushfailed
+          for i in 1 2 3 4 5; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            : > /tmp/out
+            GITHUB_OUTPUT=/tmp/out node tools/handle-issue.mjs || true
+            RESULT=$(sed -n 's/^result=//p' /tmp/out | tail -1)
+            git add data
+            if git diff --cached --quiet; then echo "変更なし"; break; fi
+            git commit -q -m "Handle app request"
+            if git push origin HEAD:main; then break; fi
+            RESULT=pushfailed; sleep $((i * 5))
+          done
+          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
       - name: Close
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ steps.h.outputs.result }}
@@ -42,6 +51,9 @@ jobs:
             request) MSG="準備の依頼を受け付けました。Claudeが準備します。" ;;
             add) MSG="動画を一覧に追加しました。" ;;
             notfound) MSG="一覧にない動画でした。" ;;
+            pushfailed|error|"")
+              gh issue comment ${{ github.event.issue.number }} -R ${{ github.repository }} -b "処理できませんでした（${RESULT:-error}）。アプリからもう一度送ってください。"
+              exit 0 ;;
             *) MSG="処理できませんでした（$RESULT）。" ;;
           esac
           gh issue close ${{ github.event.issue.number }} -R ${{ github.repository }} -c "$MSG"
