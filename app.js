@@ -216,17 +216,26 @@ function renderList(menu) {
 }
 
 // アプリからの依頼は GitHub の Issue として送る（中身は暗号化）
-async function openIssue(title, payload) {
+// iPhoneは、ボタンを押してから時間のかかる処理をはさむと画面を開けないので、
+// 準備ができたらリンクのボタンを出して、もう一度押してもらう
+async function openIssue(title, payload, onSent) {
   const env = await seal(S.key, payload);
   const body = `アプリからの依頼です（中身は暗号化されています）。\n\n\`\`\`json\n${JSON.stringify(env)}\n\`\`\``;
   const url = `https://github.com/${REPO.owner}/${REPO.name}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
-  window.open(url, '_blank');
+  modal(`<h2>GitHubで送信（${esc(title)}）</h2>
+    <p>下のボタンでGitHubが開きます。画面の<b>いちばん下の緑のボタン</b>（「Create」または「Submit new issue」）を押すと送信されます。</p>
+    <a class="btn block" id="ghLink" href="${esc(url)}" target="_blank" rel="noopener">GitHubを開く</a>
+    <p class="muted">GitHubのログイン画面が出たら、ログインしてから、もう一度アプリからやり直してください。</p>
+    <button class="btn ghost block" id="cancel">閉じる</button>`, el => {
+    el.querySelector('#ghLink').onclick = () => { setTimeout(() => { closeModal(); onSent && onSent(); }, 400); };
+    el.querySelector('#cancel').onclick = closeModal;
+  });
 }
 
 function requestVideo(v) {
   const isTed = v.menu === 'ted';
   modal(`<h2>準備を依頼</h2><p><b>${esc(v.title || v.youtubeId)}</b></p>
-    ${isTed ? `<p>GitHubの画面が開きます。<b>「Submit new issue」</b>を押すと依頼が届き、Claudeが文字起こし・翻訳・チャプター・発音のヒントを用意します。</p>`
+    ${isTed ? `<p>GitHubで依頼を送ると、Claudeが文字起こし・翻訳・チャプター・発音のヒントを用意します。</p>`
       : `<p>Chloe ChuaのYouTube動画は、文字起こしをMacからClaudeに渡す必要があります。</p>
       <ol><li>MacのブラウザでこのYouTube動画を開く</li><li>説明欄の下の「文字起こしを表示」を押す</li><li>文字起こしを全部選んでコピー</li><li>Claudeのチャットに、動画名と一緒に貼る</li></ol>
       <p>下のボタンで依頼も送っておくと、一覧に「依頼済み」と表示されます。</p>`}
@@ -234,9 +243,9 @@ function requestVideo(v) {
     <div class="row" style="margin-top:12px"><button class="btn" id="go">GitHubで依頼を送る</button><button class="btn ghost" id="cancel">閉じる</button></div>`, el => {
     el.querySelector('#cancel').onclick = closeModal;
     el.querySelector('#go').onclick = async () => {
-      await openIssue('準備の依頼', { type: 'request', youtubeId: v.youtubeId });
-      S.localReq[v.youtubeId] = Date.now(); await idb.set('localReq', S.localReq);
-      closeModal(); route();
+      await openIssue('準備の依頼', { type: 'request', youtubeId: v.youtubeId }, async () => {
+        S.localReq[v.youtubeId] = Date.now(); await idb.set('localReq', S.localReq); route();
+      });
     };
   });
 }
@@ -258,9 +267,10 @@ function addByUrl(menu) {
       const id = parseYouTubeId(el.querySelector('#u').value);
       if (!id) { el.querySelector('#e').textContent = 'YouTubeのURLを確認してください'; return; }
       const request = el.querySelector('#r').checked;
-      await openIssue('動画の追加', { type: 'add', youtubeId: id, menu: el.querySelector('#m').value, request });
-      if (request) { S.localReq[id] = Date.now(); await idb.set('localReq', S.localReq); }
-      closeModal(); toast('GitHubで「Submit new issue」を押してください。数分で一覧に入ります', 4000);
+      await openIssue('動画の追加', { type: 'add', youtubeId: id, menu: el.querySelector('#m').value, request }, async () => {
+        if (request) { S.localReq[id] = Date.now(); await idb.set('localReq', S.localReq); }
+        toast('送信すると、数分で一覧に入ります', 4000);
+      });
     };
   });
 }
@@ -681,14 +691,16 @@ function urlB64ToUint8(s) { const p = '='.repeat((4 - s.length % 4) % 4); return
 async function renderSettings() {
   setChrome('設定', 'settings');
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
-  const pushOn = await idb.get('pushRegisteredAt');
+  // 通知の登録は、GitHub側に登録ファイルがあるかで判断する
+  let pushOn = false;
+  try { pushOn = (await fetch(`data/push.enc.json?t=${Date.now()}`, { method: 'HEAD', cache: 'no-store' })).ok; } catch {}
   if (!location.hash.startsWith('#/settings')) return;
   $('#main').innerHTML = `
     <div class="section-title">毎朝9時の復習の通知</div>
     <div class="card">
       <p class="muted" style="margin-top:0">${!isStandalone() ? 'ホーム画面に追加したアプリから開くと、通知を使えます（Safariの共有ボタン →「ホーム画面に追加」）。'
         : perm === 'unsupported' ? 'この端末は通知に対応していません（iOS 16.4以降が必要です）。'
-        : pushOn ? `登録済み（${mdLabel(pushOn)}）。届かない時は、もう一度登録してください。` : '通知をオンにすると、GitHubの画面が開きます。「Submit new issue」を押すと登録が完了します。'}</p>
+        : pushOn ? '登録済みです。毎朝9時に届きます。届かない時は、もう一度登録してください。' : 'まだ登録されていません。「通知をオンにする」を押し、GitHubで送信すると登録されます（反映まで数分かかります）。'}</p>
       <div class="row wrap"><button class="btn" id="pushOn" ${!isStandalone() || perm === 'unsupported' || !S.meta?.vapidPublicKey ? 'disabled' : ''}>${pushOn ? 'もう一度登録' : '通知をオンにする'}</button>
       <button class="btn ghost" id="pushTest" ${perm === 'granted' ? '' : 'disabled'}>テスト表示</button></div>
     </div>
@@ -722,10 +734,7 @@ async function renderSettings() {
       const reg = await navigator.serviceWorker.ready;
       let sub = await reg.pushManager.getSubscription();
       if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8(S.meta.vapidPublicKey) });
-      await openIssue('通知の登録', { type: 'subscribe', subscription: sub.toJSON() });
-      await idb.set('pushRegisteredAt', today());
-      toast('GitHubで「Submit new issue」を押すと登録が完了します', 4000);
-      setTimeout(renderSettings, 500);
+      await openIssue('通知の登録', { type: 'subscribe', subscription: sub.toJSON() }, () => toast('送信すると、数分で登録されます', 4000));
     } catch (e) { toast('通知を登録できませんでした：' + e.message, 4000); }
   };
   $('#pushTest').onclick = async () => {
