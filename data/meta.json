@@ -1,0 +1,11 @@
+{
+ "v": 1,
+ "salt": "SwXJlKIg/BBH4wrY3cisNg==",
+ "iter": 310000,
+ "check": {
+  "v": 1,
+  "iv": "+npQR88T6fSscaiP",
+  "ct": "Rw9GlCTDXFe3hVLr7cXgAiGNNmj5FgEKdGaJxRza"
+ },
+ "vapidPublicKey": "BAlKihH4HWhbzd5lJzUAAA3102SCM5PDcb-dIuwElnRSEyNfz8idp3dwwPFTxo5kC-kX5zfYbzEiGAIM_hhhURk"
+}
