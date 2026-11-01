@@ -1,5 +1,5 @@
 // アプリ本体をキャッシュし、毎朝の通知を表示する
-const CACHE = 'shadowing-v2';
+const CACHE = 'shadowing-v3';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

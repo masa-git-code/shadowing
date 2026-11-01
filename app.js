@@ -733,6 +733,9 @@ async function renderSettings() {
       if (p !== 'granted') return toast('通知が許可されませんでした。iPhoneの設定 → 通知 から許可してください', 4000);
       const reg = await navigator.serviceWorker.ready;
       let sub = await reg.pushManager.getSubscription();
+      // パスワードを変えると通知用の鍵も変わるので、古い登録は消して作り直す
+      const key = sub?.options?.applicationServerKey;
+      if (sub && key && b64e(key) !== b64e(urlB64ToUint8(S.meta.vapidPublicKey))) { await sub.unsubscribe(); sub = null; }
       if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8(S.meta.vapidPublicKey) });
       await openIssue('通知の登録', { type: 'subscribe', subscription: sub.toJSON() }, () => toast('送信すると、数分で登録されます', 4000));
     } catch (e) { toast('通知を登録できませんでした：' + e.message, 4000); }
