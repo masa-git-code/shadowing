@@ -43,7 +43,8 @@ function parseFeed(xml) {
     const id = (e.match(/<yt:videoId>([^<]+)</) || [])[1];
     const title = (e.match(/<title>([^<]*)</) || [])[1] || '';
     const published = (e.match(/<published>([^<]+)</) || [])[1];
-    if (id) out.push({ id, title: decode(title), published });
+    const link = (e.match(/<link[^>]*href="([^"]+)"/) || [])[1] || '';
+    if (id) out.push({ id, title: decode(title), published, short: link.includes('/shorts/') });
   }
   return out;
 }
@@ -81,7 +82,7 @@ async function main() {
   };
 
   // 最初から入れておく動画
-  for (const s of seed.videos || []) add({ youtubeId: s.youtubeId, menu: s.menu, title: s.title || '', tedUrl: s.tedUrl });
+  for (const s of seed.videos || []) if (byId.has(s.youtubeId)) byId.get(s.youtubeId).addedBy ||= 'seed'; else add({ youtubeId: s.youtubeId, menu: s.menu, title: s.title || '', tedUrl: s.tedUrl, addedBy: 'seed' });
 
   // チャンネルの新着
   for (const ch of sources.channels) {
@@ -92,19 +93,21 @@ async function main() {
       if (r.status !== 200) { log('RSS取得失敗:', ch.name, r.status); continue; }
       for (const it of parseFeed(r.text)) {
         if (ch.filter && !it.title.toLowerCase().includes(ch.filter.toLowerCase())) continue;
-        if (/#shorts/i.test(it.title)) continue;
+        if (it.short || /#shorts/i.test(it.title)) continue;
         add({ youtubeId: it.id, menu: ch.menu, title: it.title, channel: ch.name, publishedAt: it.published });
       }
     } catch (e) { log('エラー:', ch.name, e.message); }
   }
 
   // 埋め込み再生できるか、タイトルとチャンネル名
+  // 再生できないと判定した動画も、一時的なエラーのことがあるので 7日ごとに確かめ直す
+  const recheck = Date.now() - 7 * 864e5;
   for (const v of cat.videos) {
-    if (v.checkedAt) continue;
+    if (v.checkedAt && (v.embeddable !== false || Date.parse(v.checkedAt) > recheck)) continue;
     let o;
     try { o = await oembed(v.youtubeId); } catch (e) { log('確認できませんでした:', v.youtubeId, e.message); continue; }
-    if (o.ok) { v.title ||= o.title; v.channel ||= o.author_name; v.embeddable = true; }
-    else if ([401, 403, 404].includes(o.status)) { v.embeddable = false; v.checkError = o.status; log('再生できない動画:', v.youtubeId, o.status); }
+    if (o.ok) { v.title ||= o.title; v.channel ||= o.author_name; v.embeddable = true; delete v.checkError; }
+    else if ([401, 404].includes(o.status)) { v.embeddable = false; v.checkError = o.status; log('再生できない動画:', v.youtubeId, o.status); }
     else { log('確認できませんでした:', v.youtubeId, o.status); continue; }
     v.checkedAt = now;
   }
@@ -130,11 +133,16 @@ async function main() {
   const keep = sources.keepPendingPerMenu || 40;
   const ts = v => v.publishedAt || v.addedAt || '';
   for (const menu of ['chloe', 'ted']) {
-    const pend = cat.videos.filter(v => v.menu === menu && v.status === 'pending').sort((a, b) => ts(b).localeCompare(ts(a)));
+    // 自分で追加した動画と最初から入れた動画は残す
+    const pend = cat.videos.filter(v => v.menu === menu && v.status === 'pending' && !v.addedBy).sort((a, b) => ts(b).localeCompare(ts(a)));
     const drop = new Set(pend.slice(keep).map(v => v.youtubeId));
     cat.videos = cat.videos.filter(v => !drop.has(v.youtubeId));
   }
   cat.videos.sort((a, b) => ts(b).localeCompare(ts(a)));
+  // 中身が変わった時だけ書き直す（毎回の無駄なコミットを避ける）
+  const before = await readSealed(key, 'catalog.enc.json', null);
+  const same = before && JSON.stringify({ ...before, updatedAt: 0 }) === JSON.stringify({ ...cat, updatedAt: 0 });
+  if (same) { log('一覧に変更はありません'); return; }
   cat.updatedAt = now;
   await writeSealed(key, 'catalog.enc.json', cat);
   log(`一覧: ${cat.videos.length}本（練習できる ${cat.videos.filter(v => v.status === 'ready').length}本）`);

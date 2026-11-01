@@ -243,7 +243,7 @@ function requestVideo(v) {
     <div class="row" style="margin-top:12px"><button class="btn" id="go">GitHubで依頼を送る</button><button class="btn ghost" id="cancel">閉じる</button></div>`, el => {
     el.querySelector('#cancel').onclick = closeModal;
     el.querySelector('#go').onclick = async () => {
-      await openIssue('準備の依頼', { type: 'request', youtubeId: v.youtubeId }, async () => {
+      await openIssue('準備の依頼', { type: 'request', youtubeId: v.youtubeId, menu: v.menu }, async () => {
         S.localReq[v.youtubeId] = Date.now(); await idb.set('localReq', S.localReq); route();
       });
     };

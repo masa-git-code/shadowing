@@ -7,6 +7,18 @@ import { DATA, loadMeta, seal, writeJSON, fileIdFor } from './lib/crypto.mjs';
 const src = process.argv[2];
 const d = JSON.parse(fs.readFileSync(src, 'utf8'));
 for (const k of ['youtubeId', 'menu', 'title', 'sentences', 'chapters']) if (!d[k]) throw new Error(`${k} がありません`);
+// 形式を確かめる（間違いがあるとアプリで正しく再生できない）
+const n = d.sentences.length, bad = [];
+if (!['ted', 'chloe'].includes(d.menu)) bad.push('menu は "ted" か "chloe"');
+if (!n || !d.chapters.length) bad.push('sentences と chapters が空です');
+d.sentences.forEach((s, i) => {
+  if (typeof s.start !== 'number' || typeof s.end !== 'number' || !(s.end > s.start)) bad.push(`sentences[${i}]: start < end の数字にしてください`);
+  if (!s.en || !s.ja) bad.push(`sentences[${i}]: en と ja が必要です`);
+});
+d.chapters.forEach((c, i) => {
+  if (!Number.isInteger(c.from) || !Number.isInteger(c.to) || c.from < 0 || c.from > c.to || c.to >= n) bad.push(`chapters[${i}]: from/to は 0〜${n - 1} の整数で from ≦ to`);
+});
+if (bad.length) { console.error(bad.join('\n')); process.exit(1); }
 // WPM を計算（チャプターごとと全体）
 const words = s => s.en.trim().split(/\s+/).filter(Boolean).length;
 for (const c of d.chapters) {
