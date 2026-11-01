@@ -155,7 +155,7 @@ async function importInbox() {
       done.add(p.id);
     }
     await idb.set('importedPacks', [...done]);
-    if (n) { await saveVocab(); toast(`${n}個の表現を単語帳に追加しました`); }
+    if (n) { await saveVocab(); toast(`${n}個の表現を単語帳に追加しました`); if (location.hash.startsWith('#/vocab')) renderVocab(); }
   } catch {}
 }
 
@@ -252,7 +252,7 @@ function requestVideo(v) {
 
 function parseYouTubeId(s) {
   s = (s || '').trim();
-  const m = s.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([\w-]{11})/) || s.match(/^([\w-]{11})$/);
+  const m = s.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([\w-]{11})(?![\w-])/) || s.match(/^([\w-]{11})$/);
   return m ? m[1] : null;
 }
 function addByUrl(menu) {
@@ -287,8 +287,8 @@ function loadYouTubeAPI() {
   return loadYouTubeAPI.p;
 }
 const sentAt = i => {
-  const s = S.video.sentences[i], a = (S.adjust[S.video.file] || {})[i] || {};
-  return { ...s, start: Math.max(0, s.start + (a.ds || 0)), end: s.end + (a.de || 0) };
+  const adj = S.adjust[S.video.file] || {}, a = adj[i] || {}, all = adj.all || 0, s = S.video.sentences[i];
+  return { ...s, start: Math.max(0, s.start + all + (a.ds || 0)), end: s.end + all + (a.de || 0) };
 };
 const chapterOf = i => S.video.chapters.findIndex(c => i >= c.from && i <= c.to);
 const chapAt = c => { const ch = S.video.chapters[c]; return { ...ch, start: sentAt(ch.from).start, end: sentAt(ch.to).end }; };
@@ -307,9 +307,10 @@ async function renderVideo(file, startAt) {
   setChrome(d.title, d.menu, `#/${d.menu}`);
   const p = S.progress[file];
   let startIdx = 0;
-  if (startAt != null) startIdx = Math.max(0, d.sentences.findIndex(s => s.end > startAt));
+  if (startAt != null) startIdx = Math.max(0, d.sentences.findIndex((s, k) => sentAt(k).end > startAt));
   else if (p?.sentence != null) startIdx = p.sentence;
   S.chapter = Math.max(0, chapterOf(startIdx));
+  if (S.settings.mode === 'sentence') S.loopIdx = startIdx;
 
   $('#main').innerHTML = `
     <div class="player-wrap"><div class="ratio"><div id="yt"></div></div></div>
@@ -458,13 +459,17 @@ function applyRate() {
   if (S.player?.setPlaybackRate) S.player.setPlaybackRate(rateFor().rate);
 }
 
+// seekTo の直後は getCurrentTime が古い位置を返すことがあるので、少しの間は判定を休む
+function seek(t) { S.player.seekTo(t, true); S.seekUntil = Date.now() + 700; }
+
 function playSentence(i) {
   if (!S.player?.seekTo) return;
   const c = chapterOf(i);
   if (c !== S.chapter && c >= 0) { S.chapter = c; renderChapters(); renderSentences(); applyRate(); }
   if (S.settings.mode === 'sentence') S.loopIdx = i;
   S.stopAt = S.settings.mode === 'stop' ? sentAt(i).end : null;
-  S.player.seekTo(sentAt(i).start, true);
+  S.testStop = null;
+  seek(sentAt(i).start);
   S.player.playVideo();
   setCurrent(i);
 }
@@ -485,21 +490,24 @@ function setCurrent(i) {
 // 0.1秒ごとに再生位置を見て、リピートや停止を行う
 function onTick() {
   const P = S.player; if (!P?.getCurrentTime || !S.video) return;
+  if (Date.now() < (S.seekUntil || 0)) return;
   const t = P.getCurrentTime(), playing = P.getPlayerState() === 1;
   const n = S.video.sentences.length;
   let i = -1;
   for (let k = 0; k < n; k++) { const s = sentAt(k); if (t >= s.start && t < s.end) { i = k; break; } if (s.start > t) { i = Math.max(0, k - 1); break; } }
   if (i === -1 && n && t >= sentAt(n - 1).end) i = n - 1;
   if (!playing) return;
+  // 「聞いて確かめる」は、モードにかかわらずその文の終わりで止める
+  if (S.testStop != null) { if (t >= S.testStop) { P.pauseVideo(); S.testStop = null; } return; }
   const mode = S.settings.mode;
   if (mode === 'sentence' && S.loopIdx != null) {
     const s = sentAt(S.loopIdx);
-    if (t >= s.end + 0.15 || t < s.start - 1.5) { P.seekTo(s.start, true); return; }
+    if (t >= s.end + 0.15 || t < s.start - 1.5) { seek(s.start); return; }
     setCurrent(S.loopIdx); return;
   }
   if (mode === 'chapter') {
     const ch = chapAt(S.chapter);
-    if (t >= ch.end + 0.2 || t < ch.start - 1.5) { P.seekTo(ch.start, true); markPracticed(true); return; }
+    if (t >= ch.end + 0.2 || t < ch.start - 1.5) { seek(ch.start); markPracticed(true); return; }
   }
   if (mode === 'stop') {
     if (S.stopAt == null && i >= 0) S.stopAt = sentAt(i).end;
@@ -518,7 +526,7 @@ function markPracticed(loop) {
 }
 
 function stopPlayer() {
-  clearInterval(S.tick); S.tick = null;
+  clearInterval(S.tick); S.tick = null; S.testStop = null; S.seekUntil = 0;
   try { S.player?.destroy?.(); } catch {}
   S.player = null; S.video = null; keepAwake(false);
 }
@@ -534,20 +542,27 @@ async function keepAwake(on) {
 function adjustSentence(i) {
   const file = S.video.file;
   const draw = el => {
-    const t = sentAt(i);
+    const t = sentAt(i), all = (S.adjust[file] || {}).all || 0;
     el.querySelector('#times').textContent = `${t.start.toFixed(1)}秒 〜 ${t.end.toFixed(1)}秒`;
+    el.querySelector('#allv').textContent = all ? `いま ${all > 0 ? '＋' : ''}${all}秒` : '';
   };
   modal(`<h2>この文の区切りを調整</h2><p class="muted">${esc(S.video.sentences[i].en)}</p>
     <p id="times" style="font-weight:600"></p>
     <div class="row wrap" style="margin:8px 0"><span style="width:3em">開始</span><button class="btn secondary" data-a="ds" data-v="-0.5">−0.5秒</button><button class="btn secondary" data-a="ds" data-v="0.5">＋0.5秒</button></div>
     <div class="row wrap" style="margin:8px 0"><span style="width:3em">終了</span><button class="btn secondary" data-a="de" data-v="-0.5">−0.5秒</button><button class="btn secondary" data-a="de" data-v="0.5">＋0.5秒</button></div>
+    <p class="muted" style="margin:12px 0 4px">全部の文が同じようにずれている時は、動画全体をずらします <span id="allv"></span>（秒）</p>
+    <div class="row wrap" style="margin:4px 0"><span style="width:3em">全体</span><button class="btn secondary" data-all="-1">−1</button><button class="btn secondary" data-all="-0.5">−0.5</button><button class="btn secondary" data-all="0.5">＋0.5</button><button class="btn secondary" data-all="1">＋1</button><button class="btn ghost" data-all="0">0</button></div>
     <div class="row" style="margin-top:12px"><button class="btn" id="test">聞いて確かめる</button><button class="btn ghost" id="reset">元に戻す</button><span class="spacer"></span><button class="btn ghost" id="close">閉じる</button></div>`, el => {
     draw(el);
     el.querySelectorAll('[data-a]').forEach(b => { b.onclick = () => {
       const a = ((S.adjust[file] ||= {})[i] ||= {}); a[b.dataset.a] = Math.round(((a[b.dataset.a] || 0) + Number(b.dataset.v)) * 10) / 10;
       idb.set('adjust', S.adjust); draw(el);
     }; });
-    el.querySelector('#test').onclick = () => { const m = S.settings.mode; S.settings.mode = 'stop'; playSentence(i); S.settings.mode = m; S.stopAt = sentAt(i).end; };
+    el.querySelectorAll('[data-all]').forEach(b => { b.onclick = () => {
+      const adj = (S.adjust[file] ||= {}); adj.all = b.dataset.all === '0' ? 0 : Math.round(((adj.all || 0) + Number(b.dataset.all)) * 10) / 10;
+      idb.set('adjust', S.adjust); draw(el);
+    }; });
+    el.querySelector('#test').onclick = () => { playSentence(i); S.testStop = sentAt(i).end; };
     el.querySelector('#reset').onclick = () => { if (S.adjust[file]) delete S.adjust[file][i]; idb.set('adjust', S.adjust); draw(el); };
     el.querySelector('#close').onclick = () => { closeModal(); renderSentences(); };
   });
@@ -640,6 +655,7 @@ function editVocab(v) {
     el.querySelector('#save').onclick = () => {
       const val = id => el.querySelector(id).value.trim();
       if (!val('#fp')) return toast('単語・熟語を入れてください');
+      if (v && S.vocab.some(x => x !== v && x.phrase.toLowerCase() === val('#fp').toLowerCase())) return toast('もう単語帳に入っています');
       if (v) Object.assign(v, { phrase: val('#fp'), meaning: val('#fm'), example: val('#fe'), exampleJa: val('#fj'), tip: val('#ft') });
       else if (!addVocab({ phrase: val('#fp'), meaning: val('#fm'), example: val('#fe'), exampleJa: val('#fj'), tip: val('#ft'), source: { label: '手入力' } })) return toast('もう単語帳に入っています');
       saveVocab(); closeModal(); renderVocab();
@@ -756,15 +772,18 @@ async function renderSettings() {
       const add = d.vocab.filter(v => !have.has(v.phrase.toLowerCase()));
       S.vocab.push(...add);
       S.progress = { ...d.progress, ...S.progress }; S.adjust = { ...d.adjust, ...S.adjust };
+      if (d.settings) { S.settings = { ...DEFAULT_SETTINGS, ...d.settings }; await saveSettings(); }
+      if (Array.isArray(d.importedPacks)) await idb.set('importedPacks', [...new Set([...((await idb.get('importedPacks')) || []), ...d.importedPacks])]);
       await saveVocab(); await idb.set('progress', S.progress); await idb.set('adjust', S.adjust);
       toast(`読み込みました（新しい表現 ${add.length}個）`);
     } catch (err) { toast('読み込めませんでした：' + err.message); }
+    e.target.value = '';
   };
   $('#logout').onclick = async () => { await idb.del('key'); location.hash = ''; location.reload(); };
 }
 
 async function exportBackup() {
-  const data = { app: 'shadowing', v: 1, exportedAt: new Date().toISOString(), vocab: S.vocab, progress: S.progress, adjust: S.adjust, settings: S.settings };
+  const data = { app: 'shadowing', v: 1, exportedAt: new Date().toISOString(), vocab: S.vocab, progress: S.progress, adjust: S.adjust, settings: S.settings, importedPacks: (await idb.get('importedPacks')) || [] };
   const name = `shadowing-backup-${today()}.json`;
   const file = new File([JSON.stringify(data, null, 1)], name, { type: 'application/json' });
   if (navigator.canShare?.({ files: [file] })) {

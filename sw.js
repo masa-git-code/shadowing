@@ -1,5 +1,5 @@
 // アプリ本体をキャッシュし、毎朝の通知を表示する
-const CACHE = 'shadowing-v3';
+const CACHE = 'shadowing-v4';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -9,13 +9,15 @@ self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 // 新しい版を優先し、つながらない時だけキャッシュを使う
+// ?t=… つきの読み込みも、ファイルごとに1つだけ（最新のもの）を残す
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  const key = url.origin + url.pathname;
   e.respondWith(fetch(e.request).then(r => {
-    if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
+    if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(key, copy)); }
     return r;
-  }).catch(() => caches.match(e.request, { ignoreSearch: true })));
+  }).catch(() => caches.match(key)));
 });
 
 // 単語帳（IndexedDB）から今日の復習の数を数える
