@@ -48,9 +48,9 @@ jobs:
         run: |
           case "$RESULT" in
             subscribed) MSG="通知を登録しました。毎朝9時に届きます。" ;;
-            request) MSG="準備の依頼を受け付けました。Claudeのチャットで準備を頼んでください。" ;;
+            request) MSG="準備の依頼を受け付けました。翌朝7時ごろClaudeが準備します。" ;;
             add) MSG="動画を一覧に追加しました。" ;;
-            transcript) MSG="文字起こしを受け取りました。Claudeのチャットで準備を頼んでください。" ;;
+            transcript) MSG="文字起こしを受け取りました。翌朝7時ごろClaudeが訳とチャプターをつけて準備します。" ;;
             notfound) MSG="一覧にない動画でした。" ;;
             pushfailed|error|"")
               gh issue comment ${{ github.event.issue.number }} -R ${{ github.repository }} -b "処理できませんでした（${RESULT:-error}）。アプリからもう一度送ってください。"
