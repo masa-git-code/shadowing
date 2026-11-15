@@ -282,7 +282,7 @@ async function openIssue(title, payload, onSent) {
 function requestVideo(v) {
   if (needsPaste(v)) return pasteTranscript(v);
   modal(`<h2>準備を依頼</h2><p><b>${esc(v.title || v.youtubeId)}</b></p>
-    <p>GitHubで依頼を送ったあと、Claudeのチャットで「依頼した動画を準備して」と頼むと、文字起こし・翻訳・チャプター・発音のヒントを用意します。</p>
+    <p>GitHubで依頼を送ると、翌朝7時ごろClaudeが文字起こし・翻訳・チャプター・発音のヒントを用意します。</p>
     <p class="muted">GitHubにログインしていない場合は、先にログインしてください。</p>
     <div class="row" style="margin-top:12px"><button class="btn" id="go">GitHubで依頼を送る</button><button class="btn ghost" id="cancel">閉じる</button></div>`, el => {
     el.querySelector('#cancel').onclick = closeModal;
@@ -306,7 +306,7 @@ function checkTranscript(text) {
 async function sendTranscript(v, text) {
   return openIssue('文字起こし', { type: 'transcript', youtubeId: v.youtubeId, menu: v.menu, title: v.title || '', text }, async () => {
     S.localTx[v.youtubeId] = Date.now(); await idb.set('localTx', S.localTx);
-    toast('送信したら、Claudeのチャットで「依頼した動画を準備して」と頼んでください', 5000);
+    toast('送信すると、翌朝7時ごろClaudeが訳とチャプターをつけて準備します', 4500);
     if (MENUS[location.hash.split('/')[1]]) route();
   });
 }
@@ -315,7 +315,7 @@ function pasteTranscript(v) {
     ${TX_HELP}
     <label class="field">文字起こし<textarea id="tx" rows="8" placeholder="0:00&#10;Hello everyone...&#10;0:04&#10;..."></textarea></label>
     <p class="err" id="e"></p>
-    <p class="muted">送ると暗号化して保存されます。そのあとClaudeのチャットで「依頼した動画を準備して」と頼むと、訳・チャプター・発音のヒントをつけて「練習できる」にします。</p>
+    <p class="muted">送ると暗号化して保存され、翌朝7時ごろClaudeが訳・チャプター・発音のヒントをつけて「練習できる」にします。</p>
     <div class="row"><button class="btn" id="go">GitHubで送る</button><button class="btn ghost" id="cancel">閉じる</button></div>`, el => {
     el.querySelector('#cancel').onclick = closeModal;
     el.querySelector('#go').onclick = async () => {

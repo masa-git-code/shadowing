@@ -7,7 +7,7 @@ Masa さんの英語シャドーイング用 Web アプリ。GitHub Pages で公
 暗号化には環境変数 `SHADOWING_PASSWORD` が必要（クラウド環境の Secret）。パスワードを会話・ファイル・コミットに書かない。
 
 - メニュー（`menu`）: `chloe`＝画面の「Artists」（Chloe Chua など演奏家のインタビュー。以前のデータと合わせるため名前は chloe のまま）、`ted`、`youtube`（Masa さんが URL で足した好きな動画）
-- 毎朝の自動の準備はない（2026-11-15 に Masa さんの希望で削除）。Masa さんがチャットで頼んだ時に準備する
+- 毎朝 7:17（日本時間）に Claude の定期タスクが依頼済みの動画を自動で準備する（Masa さんはアプリだけで完結させたい）。アプリから送られた文字起こし（`transcript`）も使う
 - 依頼された動画を見る: `node tools/dump.mjs requested`（一覧全体は `node tools/dump.mjs`）
 - 文字起こし
   - TED: カタログの `tedUrl`（なければ ted.com で検索）から公式の文字起こしを取る
