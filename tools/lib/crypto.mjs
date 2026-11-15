@@ -3,6 +3,7 @@
 import { webcrypto as crypto } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 
 export const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
 export const DATA = path.join(ROOT, 'data');
@@ -28,10 +29,16 @@ export async function seal(key, obj) {
   return { v: 1, iv: b64e(iv), ct: b64e(ct) };
 }
 
+// z: 1 は gzip で圧縮してから暗号化したもの（アプリから送る長い文字起こし）
 export async function open(key, env) {
-  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(env.iv) }, key, b64d(env.ct));
+  let pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(env.iv) }, key, b64d(env.ct));
+  if (env.z) pt = zlib.gunzipSync(Buffer.from(pt));
   return JSON.parse(new TextDecoder().decode(pt));
 }
+
+// メニュー（chloe は画面では「Artists」。以前のデータと合わせるため名前は変えない）
+export const MENU_KEYS = ['chloe', 'ted', 'youtube'];
+export const menuOf = m => MENU_KEYS.includes(m) ? m : 'chloe';
 
 export const randomB64 = n => b64e(crypto.getRandomValues(new Uint8Array(n)));
 

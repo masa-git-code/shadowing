@@ -8,7 +8,8 @@ const REPO = (() => {
   return { owner: 'masa-git-code', name: 'shadowing' };
 })();
 const INTERVALS = [1, 2, 4, 7, 15, 30]; // 忘却曲線にもとづく復習の間隔（日）
-const MENUS = { chloe: 'Chloe Chua', ted: 'TED' };
+// chloe は画面では「Artists」（以前のデータと合わせるため、中の名前は chloe のまま）
+const MENUS = { chloe: 'Artists', ted: 'TED', youtube: 'YouTube' };
 const DEFAULT_SETTINGS = { showEn: true, showJa: true, showHints: false, mode: 'continuous', targetWpm: null };
 
 // ---------- 小さな道具 ----------
@@ -66,6 +67,14 @@ async function unseal(key, env) {
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(env.iv) }, key, b64d(env.ct));
   return JSON.parse(new TextDecoder().decode(pt));
 }
+// 長い文字起こしは gzip で小さくしてから暗号化する（z: 1。tools/lib/crypto.mjs の open が戻す）
+async function sealZ(key, obj) {
+  if (!window.CompressionStream) return seal(key, obj);
+  const zipped = await new Response(new Blob([JSON.stringify(obj)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, zipped);
+  return { v: 1, z: 1, iv: b64e(iv), ct: b64e(ct) };
+}
 async function fetchJSON(path) {
   const r = await fetch(`${path}?t=${Date.now()}`, { cache: 'no-store' });
   if (r.status === 404) return null;
@@ -77,7 +86,7 @@ async function fetchSealed(path) { const env = await fetchJSON(path); return env
 // ---------- 状態 ----------
 const S = {
   key: null, meta: null, catalog: { videos: [] }, vocab: [], progress: {}, adjust: {}, settings: { ...DEFAULT_SETTINGS },
-  localReq: {}, video: null, player: null, tick: null, chapter: 0, cur: -1, loopIdx: null, stopAt: null, revealed: new Set(),
+  localReq: {}, localTx: {}, video: null, player: null, tick: null, chapter: 0, cur: -1, loopIdx: null, stopAt: null, revealed: new Set(),
 };
 const saveVocab = async () => { await idb.set('vocab', S.vocab); updateBadge(); };
 const saveSettings = () => idb.set('settings', S.settings);
@@ -101,12 +110,13 @@ async function start() {
   S.adjust = (await idb.get('adjust')) || {};
   S.settings = { ...DEFAULT_SETTINGS, ...((await idb.get('settings')) || {}) };
   S.localReq = (await idb.get('localReq')) || {};
+  S.localTx = (await idb.get('localTx')) || {};
   $('#tabbar').hidden = false;
   updateBadge();
   window.addEventListener('hashchange', route);
   if (!location.hash) location.hash = '#/chloe';
   route();
-  loadCatalog().then(() => { if (/^#\/(chloe|ted)?$/.test(location.hash)) route(); });
+  loadCatalog().then(() => { if (/^#\/(chloe|ted|youtube)?$/.test(location.hash)) route(); });
   importInbox();
 }
 
@@ -164,6 +174,7 @@ function setChrome(title, tab, back) {
   $('#title').textContent = title;
   document.querySelectorAll('#tabbar a').forEach(a => a.classList.toggle('active', a.dataset.tab === tab));
   const b = $('#backBtn'); b.hidden = !back; b.onclick = back ? () => { location.hash = back; } : null;
+  $('#doneBtn').hidden = true;
 }
 function route() {
   S.routeId = (S.routeId || 0) + 1;
@@ -173,7 +184,7 @@ function route() {
   window.scrollTo(0, 0);
   const [, page, arg] = location.hash.split('/');
   const q = new URLSearchParams(location.hash.split('?')[1] || '');
-  if (page === 'ted' || page === 'chloe') return renderList(page);
+  if (MENUS[page]) return renderList(page);
   if (page?.startsWith('video')) return renderVideo((arg || '').split('?')[0], Number(q.get('t')) || null);
   if (page === 'vocab') return renderVocab();
   if (page === 'review') return renderReview();
@@ -182,63 +193,96 @@ function route() {
 }
 
 // ---------- 動画の一覧 ----------
-function statusOf(v) { return v.status === 'ready' ? 'ready' : (S.localReq[v.youtubeId] || v.status === 'requested') ? 'requested' : 'pending'; }
+function statusOf(v) { return v.status === 'ready' ? 'ready' : (S.localReq[v.youtubeId] || S.localTx[v.youtubeId] || v.status === 'requested') ? 'requested' : 'pending'; }
+const isDone = v => v.status === 'ready' && !!S.progress[v.file]?.doneAt;
+const hasTranscript = v => !!(v.transcript || S.localTx[v.youtubeId]);
+// TED は Claude が公式の文字起こしを取る。それ以外は文字起こしを貼って送る
+const needsPaste = v => v.menu !== 'ted';
+function badgeOf(v) {
+  const st = statusOf(v);
+  if (st === 'ready') return isDone(v) ? ['done', '完了 ✓'] : ['ready', '練習できる'];
+  if (st === 'requested') return needsPaste(v) && !hasTranscript(v) ? ['requested', '文字起こし待ち'] : ['requested', '依頼済み'];
+  return ['pending', '準備中'];
+}
 function renderList(menu) {
   setChrome(MENUS[menu], menu);
   const vids = (S.catalog.videos || []).filter(v => v.menu === menu && v.embeddable !== false);
-  const ready = vids.filter(v => v.status === 'ready');
+  const ready = vids.filter(v => v.status === 'ready' && !isDone(v));
+  const done = vids.filter(isDone).sort((a, b) => S.progress[b.file].doneAt.localeCompare(S.progress[a.file].doneAt));
   const waiting = vids.filter(v => v.status !== 'ready').sort((a, b) => (statusOf(a) === 'requested' ? -1 : 0) - (statusOf(b) === 'requested' ? -1 : 0));
   const card = v => {
     const st = statusOf(v);
     const p = S.progress[v.file];
+    const [bc, bt] = badgeOf(v);
     const info = st === 'ready'
       ? [v.durationSec ? `${Math.round(v.durationSec / 60)}分` : '', v.wpm ? `${v.wpm} WPM` : '', v.chapters ? `${v.chapters}チャプター` : ''].filter(Boolean).join(' · ')
       : (v.channel || '') + (v.publishedAt ? ` · ${v.publishedAt.slice(0, 10)}` : '');
     const inner = `<img loading="lazy" src="https://i.ytimg.com/vi/${esc(v.youtubeId)}/mqdefault.jpg" alt="">
       <div><div class="t">${esc(v.title || v.youtubeId)}</div>${v.titleJa ? `<div class="tj">${esc(v.titleJa)}</div>` : ''}
       <div class="muted">${esc(info)}</div>
-      <div style="margin-top:4px"><span class="badge ${st}">${st === 'ready' ? '練習できる' : st === 'requested' ? '依頼済み' : '準備中'}</span>
-      ${p ? `<span class="muted"> 練習 ${p.count || 1}回 · ${mdLabel(p.at)}</span>` : ''}</div></div>`;
+      <div style="margin-top:4px"><span class="badge ${bc}">${bt}</span>
+      ${p?.at ? `<span class="muted"> 練習 ${p.count || 1}回 · ${mdLabel(p.at)}</span>` : ''}</div></div>`;
     if (st === 'ready') return `<a class="card vid" href="#/video/${esc(v.file)}">${inner}</a>`;
+    const main = needsPaste(v)
+      ? `<button class="btn ${hasTranscript(v) ? 'ghost' : 'secondary'}" data-tx="${esc(v.youtubeId)}">${hasTranscript(v) ? '文字起こしを送り直す' : '文字起こしを貼る'}</button>`
+      : st === 'pending' ? `<button class="btn secondary" data-req="${esc(v.youtubeId)}">準備を依頼</button>` : `<button class="btn ghost" data-req="${esc(v.youtubeId)}">依頼の方法を見る</button>`;
     return `<div class="card"><div class="vid">${inner}</div>
-      <div class="vid-actions">${st === 'pending' ? `<button class="btn secondary" data-req="${esc(v.youtubeId)}">準備を依頼</button>` : `<button class="btn ghost" data-req="${esc(v.youtubeId)}">依頼の方法を見る</button>`}
+      <div class="vid-actions">${main}
       <a class="btn ghost" href="https://www.youtube.com/watch?v=${esc(v.youtubeId)}" target="_blank" rel="noopener">YouTubeで見る</a></div></div>`;
   };
+  const emptyReady = menu === 'youtube' ? '下の「＋ URLで動画を追加」から、見たいYouTube動画を追加してください。'
+    : '下の「準備中」から動画を選んで依頼してください。';
   $('#main').innerHTML = `
+    <button class="btn secondary block" id="addUrl" style="margin-top:4px">＋ URLで動画を追加</button>
     <div class="section-title">練習できる（${ready.length}）</div>
-    ${ready.map(card).join('') || `<div class="card empty">まだありません。下の「準備中」から動画を選んで依頼してください。</div>`}
+    ${ready.map(card).join('') || `<div class="card empty">${done.length ? 'すべて完了しました。' : 'まだありません。'}${emptyReady}</div>`}
     <div class="section-title">準備中（${waiting.length}）</div>
-    ${waiting.map(card).join('') || `<div class="card empty">${S.catalog.updatedAt ? '新しい動画はありません' : '動画一覧はまだ作られていません'}</div>`}
-    <button class="btn secondary block" id="addUrl" style="margin-top:14px">＋ URLで動画を追加</button>
-    ${S.catalog.updatedAt ? `<p class="muted" style="text-align:center">一覧の更新：${mdLabel(S.catalog.updatedAt)}（毎週月曜に自動更新）</p>` : ''}`;
-  $('#main').querySelectorAll('[data-req]').forEach(b => { b.onclick = () => requestVideo(vids.find(v => v.youtubeId === b.dataset.req)); });
+    ${waiting.map(card).join('') || `<div class="card empty">${menu === 'youtube' ? '準備中の動画はありません' : S.catalog.updatedAt ? '新しい動画はありません' : '動画一覧はまだ作られていません'}</div>`}
+    ${done.length ? `<div class="section-title">完了（${done.length}）</div>${done.map(card).join('')}` : ''}
+    ${S.catalog.updatedAt && menu !== 'youtube' ? `<p class="muted" style="text-align:center">一覧の更新：${mdLabel(S.catalog.updatedAt)}（毎週月曜に自動更新）</p>` : ''}`;
+  const find = id => vids.find(v => v.youtubeId === id);
+  $('#main').querySelectorAll('[data-req]').forEach(b => { b.onclick = () => requestVideo(find(b.dataset.req)); });
+  $('#main').querySelectorAll('[data-tx]').forEach(b => { b.onclick = () => pasteTranscript(find(b.dataset.tx)); });
   $('#addUrl').onclick = () => addByUrl(menu);
 }
 
 // アプリからの依頼は GitHub の Issue として送る（中身は暗号化）
 // iPhoneは、ボタンを押してから時間のかかる処理をはさむと画面を開けないので、
 // 準備ができたらリンクのボタンを出して、もう一度押してもらう
+// 長い依頼（文字起こし）はURLに入らないので、本文をコピーしてGitHubの本文の欄に貼ってもらう
+const ISSUE_URL_MAX = 6000, ISSUE_BODY_MAX = 65000;
 async function openIssue(title, payload, onSent) {
-  const env = await seal(S.key, payload);
+  const env = payload.type === 'transcript' ? await sealZ(S.key, payload) : await seal(S.key, payload);
   const body = `アプリからの依頼です（中身は暗号化されています）。\n\n\`\`\`json\n${JSON.stringify(env)}\n\`\`\``;
-  const url = `https://github.com/${REPO.owner}/${REPO.name}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+  if (body.length > ISSUE_BODY_MAX) { toast('長すぎて送れません。動画を短く分けるか、Claudeのチャットに貼ってください', 5000); return false; }
+  const base = `https://github.com/${REPO.owner}/${REPO.name}/issues/new?title=${encodeURIComponent(title)}`;
+  const full = `${base}&body=${encodeURIComponent(body)}`;
+  const paste = full.length > ISSUE_URL_MAX;
   modal(`<h2>GitHubで送信（${esc(title)}）</h2>
-    <p>下のボタンでGitHubが開きます。画面の<b>いちばん下の緑のボタン</b>（「Create」または「Submit new issue」）を押すと送信されます。</p>
-    <a class="btn block" id="ghLink" href="${esc(url)}" target="_blank" rel="noopener">GitHubを開く</a>
+    ${paste
+      ? `<p>文字起こしが長いので、2ステップで送ります。</p>
+        <ol><li>下のボタンを押す（送る内容がコピーされ、GitHubが開きます）</li>
+        <li>GitHubの<b>本文の欄（Add a description）を長押しして「ペースト」</b></li>
+        <li>画面の<b>いちばん下の緑のボタン</b>（「Create」または「Submit new issue」）を押す</li></ol>
+        <a class="btn block" id="ghLink" href="${esc(base)}" target="_blank" rel="noopener">コピーしてGitHubを開く</a>`
+      : `<p>下のボタンでGitHubが開きます。画面の<b>いちばん下の緑のボタン</b>（「Create」または「Submit new issue」）を押すと送信されます。</p>
+        <a class="btn block" id="ghLink" href="${esc(full)}" target="_blank" rel="noopener">GitHubを開く</a>`}
     <p class="muted">GitHubのログイン画面が出たら、ログインしてから、もう一度アプリからやり直してください。</p>
     <button class="btn ghost block" id="cancel">閉じる</button>`, el => {
-    el.querySelector('#ghLink').onclick = () => { setTimeout(() => { closeModal(); onSent && onSent(); }, 400); };
+    el.querySelector('#ghLink').onclick = () => {
+      // コピーはボタンを押したその場でしないと、iPhoneでは許可されない
+      if (paste) navigator.clipboard?.writeText(body).catch(() => toast('コピーできませんでした。もう一度押してください', 4000));
+      setTimeout(() => { closeModal(); onSent && onSent(); }, 400);
+    };
     el.querySelector('#cancel').onclick = closeModal;
   });
+  return true;
 }
 
 function requestVideo(v) {
-  const isTed = v.menu === 'ted';
+  if (needsPaste(v)) return pasteTranscript(v);
   modal(`<h2>準備を依頼</h2><p><b>${esc(v.title || v.youtubeId)}</b></p>
-    ${isTed ? `<p>GitHubで依頼を送ると、Claudeが文字起こし・翻訳・チャプター・発音のヒントを用意します。</p>`
-      : `<p>Chloe ChuaのYouTube動画は、文字起こしをMacからClaudeに渡す必要があります。</p>
-      <ol><li>MacのブラウザでこのYouTube動画を開く</li><li>説明欄の下の「文字起こしを表示」を押す</li><li>文字起こしを全部選んでコピー</li><li>Claudeのチャットに、動画名と一緒に貼る</li></ol>
-      <p>下のボタンで依頼も送っておくと、一覧に「依頼済み」と表示されます。</p>`}
+    <p>GitHubで依頼を送ると、Claudeが文字起こし・翻訳・チャプター・発音のヒントを用意します（毎朝7時ごろ）。</p>
     <p class="muted">GitHubにログインしていない場合は、先にログインしてください。</p>
     <div class="row" style="margin-top:12px"><button class="btn" id="go">GitHubで依頼を送る</button><button class="btn ghost" id="cancel">閉じる</button></div>`, el => {
     el.querySelector('#cancel').onclick = closeModal;
@@ -246,6 +290,39 @@ function requestVideo(v) {
       await openIssue('準備の依頼', { type: 'request', youtubeId: v.youtubeId, menu: v.menu }, async () => {
         S.localReq[v.youtubeId] = Date.now(); await idb.set('localReq', S.localReq); route();
       });
+    };
+  });
+}
+
+// YouTube の「文字起こしを表示」からコピーした文字を確かめる（時刻が必要）
+const TX_HELP = `<ol class="small"><li>パソコン（Mac）のブラウザでYouTube動画を開く</li><li>説明欄のいちばん下の「文字起こしを表示」を押す</li><li>右に出た文字起こしを、時刻ごと全部選んでコピー</li><li>この欄に貼る（MacでもこのアプリをSafariで開けます。iPhoneに貼る場合は、同じApple IDならMacでコピーしたものをそのまま貼れます）</li></ol>`;
+function checkTranscript(text) {
+  text = (text || '').trim();
+  if (!text) return { err: '文字起こしを貼ってください' };
+  const times = (text.match(/(^|\n)\s*(\d{1,2}:)?\d{1,2}:\d{2}/g) || []).length;
+  if (times < 2) return { err: '時刻（0:05 など）が入っていません。YouTubeの文字起こしを時刻ごとコピーしてください' };
+  return { text, times };
+}
+async function sendTranscript(v, text) {
+  return openIssue('文字起こし', { type: 'transcript', youtubeId: v.youtubeId, menu: v.menu, title: v.title || '', text }, async () => {
+    S.localTx[v.youtubeId] = Date.now(); await idb.set('localTx', S.localTx);
+    toast('送信すると、翌朝Claudeが訳とチャプターをつけて準備します', 4500);
+    if (MENUS[location.hash.split('/')[1]]) route();
+  });
+}
+function pasteTranscript(v) {
+  modal(`<h2>文字起こしを貼る</h2><p><b>${esc(v.title || v.youtubeId)}</b></p>
+    ${TX_HELP}
+    <label class="field">文字起こし<textarea id="tx" rows="8" placeholder="0:00&#10;Hello everyone...&#10;0:04&#10;..."></textarea></label>
+    <p class="err" id="e"></p>
+    <p class="muted">送ると暗号化して保存され、翌朝7時ごろClaudeが訳・チャプター・発音のヒントをつけて「練習できる」にします。</p>
+    <div class="row"><button class="btn" id="go">GitHubで送る</button><button class="btn ghost" id="cancel">閉じる</button></div>`, el => {
+    el.querySelector('#cancel').onclick = closeModal;
+    el.querySelector('#go').onclick = async () => {
+      const c = checkTranscript(el.querySelector('#tx').value);
+      el.querySelector('#e').textContent = c.err || '';
+      if (c.err) return;
+      await sendTranscript(v, c.text);
     };
   });
 }
@@ -258,18 +335,36 @@ function parseYouTubeId(s) {
 function addByUrl(menu) {
   modal(`<h2>URLで動画を追加</h2>
     <label class="field">YouTubeのURL<input type="url" id="u" placeholder="https://www.youtube.com/watch?v=..."></label>
-    <label class="field">メニュー<select id="m"><option value="chloe" ${menu === 'chloe' ? 'selected' : ''}>Chloe Chua</option><option value="ted" ${menu === 'ted' ? 'selected' : ''}>TED</option></select></label>
-    <label class="row" style="font-size:14px;margin:10px 0"><input type="checkbox" id="r" checked style="width:auto"> 準備の依頼もする</label>
+    <label class="field">メニュー<select id="m">${Object.entries(MENUS).map(([k, l]) => `<option value="${k}" ${menu === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    <div id="tedBox"><label class="row" style="font-size:14px;margin:10px 0"><input type="checkbox" id="r" checked style="width:auto"> 準備の依頼もする（ClaudeがTEDの公式の文字起こしを取ります）</label></div>
+    <div id="txBox"><p class="muted" style="margin:10px 0 0">TED以外は、YouTubeの文字起こしを貼って送ると準備できます。あとから一覧の「文字起こしを貼る」で送ることもできます。</p>
+      <details><summary class="muted">コピーのしかた</summary>${TX_HELP}</details>
+      <label class="field">文字起こし（あれば）<textarea id="tx" rows="6" placeholder="0:00&#10;Hello everyone..."></textarea></label></div>
     <p class="err" id="e"></p>
     <div class="row"><button class="btn" id="go">GitHubで送る</button><button class="btn ghost" id="cancel">閉じる</button></div>`, el => {
+    const sel = el.querySelector('#m');
+    const paint = () => { const ted = sel.value === 'ted'; el.querySelector('#tedBox').hidden = !ted; el.querySelector('#txBox').hidden = ted; };
+    sel.onchange = paint; paint();
     el.querySelector('#cancel').onclick = closeModal;
     el.querySelector('#go').onclick = async () => {
+      const e = el.querySelector('#e');
+      e.textContent = '';
       const id = parseYouTubeId(el.querySelector('#u').value);
-      if (!id) { el.querySelector('#e').textContent = 'YouTubeのURLを確認してください'; return; }
-      const request = el.querySelector('#r').checked;
-      await openIssue('動画の追加', { type: 'add', youtubeId: id, menu: el.querySelector('#m').value, request }, async () => {
+      if (!id) { e.textContent = 'YouTubeのURLを確認してください'; return; }
+      const m = sel.value;
+      const known = (S.catalog.videos || []).find(v => v.youtubeId === id);
+      if (known?.status === 'ready') { e.textContent = `この動画はもう「${MENUS[known.menu] || ''}」で練習できます`; return; }
+      const raw = m === 'ted' ? '' : el.querySelector('#tx').value.trim();
+      if (raw) {
+        const c = checkTranscript(raw);
+        if (c.err) { e.textContent = c.err; return; }
+        await sendTranscript({ youtubeId: id, menu: m, title: known?.title || '' }, c.text);
+        return;
+      }
+      const request = m === 'ted' && el.querySelector('#r').checked;
+      await openIssue('動画の追加', { type: 'add', youtubeId: id, menu: m, request }, async () => {
         if (request) { S.localReq[id] = Date.now(); await idb.set('localReq', S.localReq); }
-        toast('送信すると、数分で一覧に入ります', 4000);
+        toast(m === 'ted' ? '送信すると、数分で一覧に入ります' : '送信すると、数分で一覧の「準備中」に入ります。文字起こしはそこから貼れます', 4500);
       });
     };
   });
@@ -305,6 +400,7 @@ async function renderVideo(file, startAt) {
   document.body.classList.add('video-mode');
   d.file = file; S.video = d; S.revealed = new Set(); S.loopIdx = null; S.stopAt = null; S.cur = -1;
   setChrome(d.title, d.menu, `#/${d.menu}`);
+  paintDone();
   const p = S.progress[file];
   let startIdx = 0;
   if (startAt != null) startIdx = Math.max(0, d.sentences.findIndex((s, k) => sentAt(k).end > startAt));
@@ -518,6 +614,19 @@ function onTick() {
     if (c !== S.chapter && c >= 0 && mode !== 'chapter') { S.chapter = c; renderChapters(); renderSentences(); applyRate(); }
     setCurrent(i);
   }
+}
+
+// 完了フラグ（このiPhoneの中の練習の記録に入る。バックアップにも入る）
+function paintDone() {
+  const b = $('#doneBtn'), file = S.video?.file; if (!file) return;
+  const on = !!S.progress[file]?.doneAt;
+  b.hidden = false; b.classList.toggle('on', on); b.textContent = on ? '完了 ✓' : '完了にする';
+  b.onclick = () => {
+    const p = S.progress[file] ||= {};
+    if (p.doneAt) delete p.doneAt; else p.doneAt = today();
+    idb.set('progress', S.progress); paintDone();
+    toast(p.doneAt ? '完了にしました。一覧の「完了」に入ります' : '完了を取り消しました');
+  };
 }
 
 function markPracticed(loop) {

@@ -2,14 +2,14 @@
 // 使い方: SHADOWING_PASSWORD=... node tools/seal-video.mjs work/video.json
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA, loadMeta, seal, writeJSON, fileIdFor } from './lib/crypto.mjs';
+import { DATA, loadMeta, seal, writeJSON, fileIdFor, MENU_KEYS } from './lib/crypto.mjs';
 
 const src = process.argv[2];
 const d = JSON.parse(fs.readFileSync(src, 'utf8'));
 for (const k of ['youtubeId', 'menu', 'title', 'sentences', 'chapters']) if (!d[k]) throw new Error(`${k} がありません`);
 // 形式を確かめる（間違いがあるとアプリで正しく再生できない）
 const n = d.sentences.length, bad = [];
-if (!['ted', 'chloe'].includes(d.menu)) bad.push('menu は "ted" か "chloe"');
+if (!MENU_KEYS.includes(d.menu)) bad.push(`menu は ${MENU_KEYS.map(m => `"${m}"`).join(' / ')} のどれか`);
 if (!n || !d.chapters.length) bad.push('sentences と chapters が空です');
 d.sentences.forEach((s, i) => {
   if (typeof s.start !== 'number' || typeof s.end !== 'number' || !(s.end > s.start)) bad.push(`sentences[${i}]: start < end の数字にしてください`);

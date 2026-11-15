@@ -53,6 +53,11 @@ label.field > input, label.field > textarea, label.field > select { margin-top: 
 .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--line); color: var(--sub); }
 .badge.ready { background: #dcfce7; color: var(--good); }
 .badge.requested { background: #fef3c7; color: var(--warn); }
+.badge.done { background: var(--accent-soft); color: var(--accent); }
+.done-btn { flex: none; border: 1px solid var(--accent); background: none; color: var(--accent); border-radius: 999px; padding: 4px 12px; font-size: 13px; font-weight: 600; }
+.done-btn.on { background: var(--accent); color: #fff; }
+#modal ol.small { font-size: 14px; margin: 6px 0; }
+details summary { margin: 6px 0; cursor: pointer; }
 .vid-actions { margin-top: 10px; display: flex; gap: 8px; }
 
 /* 練習画面 */
