@@ -5,7 +5,7 @@
   --safe-b: env(safe-area-inset-bottom, 0px); --safe-t: env(safe-area-inset-top, 0px);
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #000; --card: #1c1c1e; --ink: #f2f2f7; --sub: #9a9aa2; --line: #2c2c2e; --accent: #5b8cff; --accent-soft: #1b2540; --stress: #fb923c; }
+  :root { --bg: #000; --card: #1c1c1e; --ink: #f2f2f7; --sub: #9a9aa2; --line: #2c2c2e; --accent: #5b8cff; --accent-soft: #1b2540; --stress: #fb923c; --good: #4ade80; --warn: #fbbf24; --bad: #f87171; }
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Helvetica Neue", sans-serif; }
@@ -30,7 +30,7 @@ a { color: var(--accent); }
 .muted { color: var(--sub); font-size: 13px; }
 .empty { text-align: center; color: var(--sub); padding: 28px 12px; font-size: 14px; }
 
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 12px; padding: 11px 16px; background: var(--accent); color: #fff; font-weight: 600; font-size: 15px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; white-space: nowrap; border: 0; border-radius: 12px; padding: 11px 16px; background: var(--accent); color: #fff; font-weight: 600; font-size: 15px; }
 .btn.secondary { background: var(--accent-soft); color: var(--accent); }
 .btn.ghost { background: transparent; color: var(--accent); padding: 8px 10px; }
 .btn.danger { background: #fee2e2; color: var(--bad); }
@@ -58,7 +58,7 @@ label.field > input, label.field > textarea, label.field > select { margin-top: 
 .done-btn.on { background: var(--accent); color: #fff; }
 #modal ol.small { font-size: 14px; margin: 6px 0; }
 details summary { margin: 6px 0; cursor: pointer; }
-.vid-actions { margin-top: 10px; display: flex; gap: 8px; }
+.vid-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* 練習画面 */
 .player-wrap { position: sticky; top: calc(52px + var(--safe-t)); z-index: 10; margin: -12px -14px 0; background: #000; }
@@ -134,3 +134,13 @@ body.video-mode #tabbar { display: none !important; }
 .login h2 { margin: 12px 0 4px; }
 .err { color: var(--bad); font-size: 13px; min-height: 1.4em; }
 body.video-mode #toast { bottom: calc(130px + var(--safe-b)); }
+
+/* iPhone SE（幅320）でも次の文ボタンが画面に収まるように */
+@media (max-width: 359px) { .ctl-row { gap: 4px; } .speed .val { min-width: 64px; } .speed button { min-width: 30px; } .transport { gap: 4px; } .transport button { width: 38px; height: 38px; } .transport button.play { width: 46px; height: 46px; } }
+
+/* ダークモード：白文字が読める濃さの青、目にまぶしくない色 */
+@media (prefers-color-scheme: dark) {
+  .btn:not(.secondary):not(.ghost):not(.danger), .transport button.play, .done-btn.on { background: #3b6fe0; }
+  .badge.ready { background: #12341f; } .badge.requested { background: #3a2a0a; } .btn.danger { background: #3b1414; }
+  #modal { background: rgba(0,0,0,.6); } #modal .sheet { background: var(--card); }
+}

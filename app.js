@@ -19,7 +19,8 @@ const pad2 = n => String(n).padStart(2, '0');
 const ymd = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const today = () => ymd(new Date());
 const addDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
-const mdLabel = s => s ? `${Number(s.slice(5, 7))}/${Number(s.slice(8, 10))}` : '';
+// 時刻つき（ISO）の日付は日本時間に直してから表示する
+const mdLabel = s => { if (!s) return ''; if (s.includes('T')) s = ymd(new Date(s)); return `${Number(s.slice(5, 7))}/${Number(s.slice(8, 10))}`; };
 const mmss = t => `${Math.floor(t / 60)}:${pad2(Math.floor(t % 60))}`;
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
@@ -116,7 +117,8 @@ async function start() {
   window.addEventListener('hashchange', route);
   if (!location.hash) location.hash = '#/chloe';
   route();
-  loadCatalog().then(() => { if (/^#\/(chloe|ted)?$/.test(location.hash)) route(); });
+  // 一覧を描き直すだけにする（開いている入力画面は閉じない）
+  loadCatalog().then(() => { const m = location.hash.match(/^#\/(chloe|ted)$/); if (m) renderList(m[1]); });
   importInbox();
 }
 
@@ -149,7 +151,9 @@ async function loadCatalog() {
   try {
     const c = await fetchSealed('data/catalog.enc.json');
     if (c) S.catalog = c;
-  } catch (e) { toast('動画一覧を読み込めませんでした'); }
+    return true;
+  } catch (e) { toast('動画一覧を読み込めませんでした'); return false; }
+  finally { S.catalogLoaded = true; }
 }
 
 // Claude が用意した表現（Teamsの表現など）を単語帳に取り込む
@@ -164,8 +168,9 @@ async function importInbox() {
       for (const it of p.items || []) { if (addVocab({ ...it, source: it.source || { label: 'Claudeから' } }, true)) n++; }
       done.add(p.id);
     }
+    if (n) await saveVocab();
     await idb.set('importedPacks', [...done]);
-    if (n) { await saveVocab(); toast(`${n}個の表現を単語帳に追加しました`); if (location.hash.startsWith('#/vocab')) renderVocab(); }
+    if (n) { toast(`${n}個の表現を単語帳に追加しました`); if (location.hash.startsWith('#/vocab')) renderVocab(); }
   } catch {}
 }
 
@@ -216,12 +221,12 @@ function renderList(menu) {
     const [bc, bt] = badgeOf(v);
     const info = st === 'ready'
       ? [v.durationSec ? `${Math.round(v.durationSec / 60)}分` : '', v.wpm ? `${v.wpm} WPM` : '', v.chapters ? `${v.chapters}チャプター` : ''].filter(Boolean).join(' · ')
-      : (v.channel || '') + (v.publishedAt ? ` · ${v.publishedAt.slice(0, 10)}` : '');
+      : (v.channel || '') + (v.publishedAt ? ` · ${ymd(new Date(v.publishedAt))}` : '');
     const inner = `<img loading="lazy" src="https://i.ytimg.com/vi/${esc(v.youtubeId)}/mqdefault.jpg" alt="">
       <div><div class="t">${esc(v.title || v.youtubeId)}</div>${v.titleJa ? `<div class="tj">${esc(v.titleJa)}</div>` : ''}
       <div class="muted">${esc(info)}</div>
       <div style="margin-top:4px"><span class="badge ${bc}">${bt}</span>
-      ${p?.at ? `<span class="muted"> 練習 ${p.count || 1}回 · ${mdLabel(p.at)}</span>` : ''}</div></div>`;
+      ${p?.at ? `<span class="muted"> 練習 ${esc(String(p.count || 1))}回 · ${esc(mdLabel(String(p.at)))}</span>` : ''}</div></div>`;
     if (st === 'ready') return `<a class="card vid" href="#/video/${esc(v.file)}">${inner}</a>`;
     const main = needsPaste(v)
       ? `<button class="btn ${hasTranscript(v) ? 'ghost' : 'secondary'}" data-tx="${esc(v.youtubeId)}">${hasTranscript(v) ? '文字起こしを送り直す' : '文字起こしを貼る'}</button>`
@@ -230,6 +235,10 @@ function renderList(menu) {
       <div class="vid-actions">${main}
       <a class="btn ghost" href="https://www.youtube.com/watch?v=${esc(v.youtubeId)}" target="_blank" rel="noopener">YouTubeで見る</a></div></div>`;
   };
+  if (!S.catalogLoaded && !(S.catalog.videos || []).length) {
+    $('#main').innerHTML = '<div class="card empty">読み込み中…</div>';
+    return;
+  }
   const emptyReady = menu === 'chloe' ? '上の「＋ URLで動画を追加」から見たい動画を追加するか、下の「準備中」から文字起こしを貼ってください。'
     : '下の「準備中」から動画を選んで依頼してください。';
   $('#main').innerHTML = `
@@ -301,6 +310,8 @@ function checkTranscript(text) {
   if (!text) return { err: '文字起こしを貼ってください' };
   const times = (text.match(/(^|\n)\s*(\d{1,2}:)?\d{1,2}:\d{2}/g) || []).length;
   if (times < 2) return { err: '時刻（0:05 など）が入っていません。YouTubeの文字起こしを時刻ごとコピーしてください' };
+  const words = text.replace(/(^|\n)\s*(\d{1,2}:)?\d{1,2}:\d{2}/g, '').replace(/\s+/g, ' ').trim();
+  if (words.length < 20) return { err: '英文が短すぎます。文字起こしを全部コピーしてください' };
   return { text, times };
 }
 async function sendTranscript(v, text) {
@@ -329,7 +340,14 @@ function pasteTranscript(v) {
 
 function parseYouTubeId(s) {
   s = (s || '').trim();
-  const m = s.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([\w-]{11})(?![\w-])/) || s.match(/^([\w-]{11})$/);
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
+  let u; try { u = new URL(s); } catch { return null; }
+  const host = u.hostname.replace(/^(www|m|music)\./, '');
+  const ok = id => /^[\w-]{11}$/.test(id || '') ? id : null;
+  if (host === 'youtu.be') return ok(u.pathname.split('/')[1]);
+  if (host !== 'youtube.com' && host !== 'youtube-nocookie.com') return null;
+  if (u.searchParams.get('v')) return ok(u.searchParams.get('v'));
+  const m = u.pathname.match(/^\/(?:shorts|embed|live|v)\/([\w-]{11})(?:\/|$)/);
   return m ? m[1] : null;
 }
 function addByUrl(menu) {
@@ -353,6 +371,7 @@ function addByUrl(menu) {
       if (!id) { e.textContent = 'YouTubeのURLを確認してください'; return; }
       const m = sel.value;
       const known = (S.catalog.videos || []).find(v => v.youtubeId === id);
+      if (known?.embeddable === false) { e.textContent = 'この動画は持ち主がアプリ内での再生を許可していないため、追加できません'; return; }
       if (known?.status === 'ready') { e.textContent = `この動画はもう「${MENUS[known.menu] || ''}」で練習できます`; return; }
       const raw = m === 'ted' ? '' : el.querySelector('#tx').value.trim();
       if (raw) {
@@ -376,14 +395,16 @@ function loadYouTubeAPI() {
   if (loadYouTubeAPI.p) return loadYouTubeAPI.p;
   loadYouTubeAPI.p = new Promise((res, rej) => {
     window.onYouTubeIframeAPIReady = res;
-    const s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api'; s.onerror = rej;
+    const s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api';
+    s.onerror = e => { loadYouTubeAPI.p = null; s.remove(); rej(e); }; // 次に開いた時にもう一度読み込む
     document.head.appendChild(s);
   });
   return loadYouTubeAPI.p;
 }
 const sentAt = i => {
   const adj = S.adjust[S.video.file] || {}, a = adj[i] || {}, all = adj.all || 0, s = S.video.sentences[i];
-  return { ...s, start: Math.max(0, s.start + all + (a.ds || 0)), end: s.end + all + (a.de || 0) };
+  const start = Math.max(0, s.start + all + (a.ds || 0));
+  return { ...s, start, end: Math.max(start + 0.3, s.end + all + (a.de || 0)) };
 };
 const chapterOf = i => S.video.chapters.findIndex(c => i >= c.from && i <= c.to);
 const chapAt = c => { const ch = S.video.chapters[c]; return { ...ch, start: sentAt(ch.from).start, end: sentAt(ch.to).end }; };
@@ -405,6 +426,7 @@ async function renderVideo(file, startAt) {
   let startIdx = 0;
   if (startAt != null) startIdx = Math.max(0, d.sentences.findIndex((s, k) => sentAt(k).end > startAt));
   else if (p?.sentence != null) startIdx = p.sentence;
+  startIdx = Math.min(Math.max(0, Number(startIdx) || 0), d.sentences.length - 1);
   S.chapter = Math.max(0, chapterOf(startIdx));
   if (S.settings.mode === 'sentence') S.loopIdx = startIdx;
 
@@ -437,8 +459,8 @@ async function renderVideo(file, startAt) {
     const t = e.target.dataset.t; if (!t) return;
     S.settings[t] = !S.settings[t]; saveSettings(); S.revealed = new Set(); paintControls(); renderSentences();
   };
-  $('#slower').onclick = () => changeWpm(-10);
-  $('#faster').onclick = () => changeWpm(+10);
+  $('#slower').onclick = () => changeWpm(-1);
+  $('#faster').onclick = () => changeWpm(+1);
   $('#speedVal').onclick = () => { S.settings.targetWpm = null; saveSettings(); applyRate(); };
 
   renderChapters(); renderSentences(); paintControls();
@@ -484,13 +506,20 @@ function hintHtml(s) {
 function enHtml(s) {
   const showH = S.settings.showHints && s.hints;
   let text = showH && s.hints.chunks ? s.hints.chunks : s.en;
-  let html = esc(text);
+  let html;
   if (showH && s.hints.stress?.length) {
+    // 強く読む語は、エスケープ前の文で位置を探してから、かけらごとにエスケープする
+    const marks = [];
     for (const w of s.hints.stress) {
-      const re = new RegExp(`(^|[^\\w'])(${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?=[^\\w']|$)`, 'i');
-      html = html.replace(re, '$1<span class="stress">$2</span>');
+      const re = new RegExp(`(^|[^\\w'’])(${String(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?=[^\\w'’]|$)`, 'i');
+      const m = re.exec(text);
+      if (m) { const at = m.index + m[1].length; if (!marks.some(k => at < k[1] && at + m[2].length > k[0])) marks.push([at, at + m[2].length]); }
     }
-  }
+    marks.sort((a, b) => a[0] - b[0]);
+    let pos = 0; html = '';
+    for (const [a, b] of marks) { html += esc(text.slice(pos, a)) + `<span class="stress">${esc(text.slice(a, b))}</span>`; pos = b; }
+    html += esc(text.slice(pos));
+  } else html = esc(text);
   if (showH) html = html.replace(/ \/ /g, ' <span class="chunk-sep">/</span> ');
   return html;
 }
@@ -542,12 +571,17 @@ function rateFor() {
 function paintSpeed() {
   const { rate, orig } = rateFor();
   $('#speedVal').innerHTML = S.settings.targetWpm
-    ? `${S.settings.targetWpm} WPM<small>元 ${orig || '?'} · ${rate}倍</small>`
+    ? `${orig ? Math.round(orig * rate) : S.settings.targetWpm} WPM<small>元 ${orig || '?'} · ${rate}倍</small>`
     : `等速<small>${orig || '?'} WPM</small>`;
 }
-function changeWpm(delta) {
+// YouTube の速さは 0.25 刻みなので、＋／− は実際に変わる次の速さへ進める
+function changeWpm(dir) {
   const orig = S.video.chapters[S.chapter].wpm || S.video.wpm || 150;
-  S.settings.targetWpm = Math.max(60, Math.min(260, (S.settings.targetWpm || Math.round(orig / 10) * 10) + delta));
+  const rates = (S.player?.getAvailablePlaybackRates?.() || [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]).slice().sort((a, b) => a - b);
+  const cur = S.settings.targetWpm ? rateFor().rate : 1;
+  const next = dir > 0 ? rates.find(r => r > cur + 1e-9) : rates.filter(r => r < cur - 1e-9).pop();
+  if (!next) { toast(dir > 0 ? 'これ以上は速くできません' : 'これ以上は遅くできません'); return; }
+  S.settings.targetWpm = Math.round(orig * next);
   saveSettings(); applyRate();
 }
 function applyRate() {
@@ -661,7 +695,7 @@ function adjustSentence(i) {
     <div class="row wrap" style="margin:8px 0"><span style="width:3em">終了</span><button class="btn secondary" data-a="de" data-v="-0.5">−0.5秒</button><button class="btn secondary" data-a="de" data-v="0.5">＋0.5秒</button></div>
     <p class="muted" style="margin:12px 0 4px">全部の文が同じようにずれている時は、動画全体をずらします <span id="allv"></span>（秒）</p>
     <div class="row wrap" style="margin:4px 0"><span style="width:3em">全体</span><button class="btn secondary" data-all="-1">−1</button><button class="btn secondary" data-all="-0.5">−0.5</button><button class="btn secondary" data-all="0.5">＋0.5</button><button class="btn secondary" data-all="1">＋1</button><button class="btn ghost" data-all="0">0</button></div>
-    <div class="row" style="margin-top:12px"><button class="btn" id="test">聞いて確かめる</button><button class="btn ghost" id="reset">元に戻す</button><span class="spacer"></span><button class="btn ghost" id="close">閉じる</button></div>`, el => {
+    <div class="row wrap" style="margin-top:12px"><button class="btn" id="test">聞いて確かめる</button><button class="btn ghost" id="reset">元に戻す</button><span class="spacer"></span><button class="btn ghost" id="close">閉じる</button></div>`, el => {
     draw(el);
     el.querySelectorAll('[data-a]').forEach(b => { b.onclick = () => {
       const a = ((S.adjust[file] ||= {})[i] ||= {}); a[b.dataset.a] = Math.round(((a[b.dataset.a] || 0) + Number(b.dataset.v)) * 10) / 10;
@@ -716,7 +750,7 @@ function renderVocab() {
   const draw = () => {
     const q = $('#q').value.trim().toLowerCase();
     const list = S.vocab.filter(v => !q || (v.phrase + v.meaning).toLowerCase().includes(q));
-    $('#vlist').innerHTML = list.map(v => `<button class="vocab-item" data-id="${v.id}"><span class="d">${v.mastered ? '習得済み' : v.due <= today() ? '今日' : '次 ' + mdLabel(v.due)}</span>
+    $('#vlist').innerHTML = list.map(v => `<button class="vocab-item" data-id="${esc(v.id)}"><span class="d">${v.mastered ? '習得済み' : v.due <= today() ? '今日' : '次 ' + mdLabel(v.due)}</span>
       <div class="p">${esc(v.phrase)}</div><div class="m">${esc(v.meaning)}</div></button>`).join('') || `<div class="card empty">${q ? '見つかりません' : '練習画面の「＋」がついた表現をタップすると、ここに追加されます'}</div>`;
   };
   draw();
@@ -869,7 +903,7 @@ async function renderSettings() {
     const reg = await navigator.serviceWorker.ready; const n = dueList().length;
     reg.showNotification('Shadowing', { body: n ? `今日の復習：${n}個` : '今日の復習はありません', icon: 'icons/icon-192.png', data: { url: './#/review' } });
   };
-  $('#reload').onclick = async () => { await loadCatalog(); await importInbox(); toast('更新しました'); };
+  $('#reload').onclick = async () => { const ok = await loadCatalog(); await importInbox(); if (ok) toast('更新しました'); };
   $('#export').onclick = exportBackup;
   $('#import').onclick = () => $('#importFile').click();
   $('#importFile').onchange = async e => {
@@ -878,7 +912,10 @@ async function renderSettings() {
       const d = JSON.parse(await f.text());
       if (!Array.isArray(d.vocab)) throw new Error('形式が違います');
       const have = new Set(S.vocab.map(v => v.phrase.toLowerCase()));
-      const add = d.vocab.filter(v => !have.has(v.phrase.toLowerCase()));
+      const norm = v => ({ meaning: '', note: '', example: '', exampleJa: '', tip: '', source: null, mastered: false, createdAt: new Date().toISOString(), ...v,
+        id: /^[\w-]+$/.test(v.id || '') ? v.id : uid(), phrase: String(v.phrase), stage: Number(v.stage) || 0,
+        due: /^\d{4}-\d{2}-\d{2}$/.test(v.due || '') ? v.due : today(), history: Array.isArray(v.history) ? v.history : [] });
+      const add = d.vocab.filter(v => v && typeof v.phrase === 'string' && v.phrase.trim() && !have.has(v.phrase.toLowerCase())).map(norm);
       S.vocab.push(...add);
       S.progress = { ...d.progress, ...S.progress }; S.adjust = { ...d.adjust, ...S.adjust };
       if (d.settings) { S.settings = { ...DEFAULT_SETTINGS, ...d.settings }; await saveSettings(); }
@@ -903,4 +940,6 @@ async function exportBackup() {
 }
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.key) updateBadge(); });
-boot();
+boot().catch(() => {
+  $('#main').innerHTML = '<div class="card empty">アプリのデータを開けませんでした。プライベートブラウズを使っていないか確かめて、アプリを開き直してください。<br><br><button class="btn secondary" onclick="location.reload()">もう一度読み込む</button></div>';
+});
