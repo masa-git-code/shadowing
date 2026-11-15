@@ -1,5 +1,5 @@
 name: Handle app request
-# アプリから送られた依頼（準備の依頼、動画の追加、通知の登録）を処理する
+# アプリから送られた依頼（準備の依頼、動画の追加、文字起こし、通知の登録）を処理する
 on:
   issues:
     types: [opened]
@@ -48,8 +48,9 @@ jobs:
         run: |
           case "$RESULT" in
             subscribed) MSG="通知を登録しました。毎朝9時に届きます。" ;;
-            request) MSG="準備の依頼を受け付けました。Claudeが準備します。" ;;
+            request) MSG="準備の依頼を受け付けました。Claudeのチャットで準備を頼んでください。" ;;
             add) MSG="動画を一覧に追加しました。" ;;
+            transcript) MSG="文字起こしを受け取りました。Claudeのチャットで準備を頼んでください。" ;;
             notfound) MSG="一覧にない動画でした。" ;;
             pushfailed|error|"")
               gh issue comment ${{ github.event.issue.number }} -R ${{ github.repository }} -b "処理できませんでした（${RESULT:-error}）。アプリからもう一度送ってください。"
