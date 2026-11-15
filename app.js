@@ -28,12 +28,13 @@ function toast(msg, ms = 2600) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
   clearTimeout(toast.tm); toast.tm = setTimeout(() => { t.hidden = true; }, ms);
 }
-function modal(html, bind) {
-  $('#modalBody').innerHTML = html; $('#modal').hidden = false;
+function modal(html, bind, opt = {}) {
+  $('#modalBody').innerHTML = html; $('#modal').hidden = false; $('#modal').dataset.sticky = opt.sticky ? '1' : '';
   bind && bind($('#modalBody'));
 }
 function closeModal() { $('#modal').hidden = true; $('#modalBody').innerHTML = ''; }
-$('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+// 入力の途中や送信の確認中は、外側を押しても閉じない
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal' && !$('#modal').dataset.sticky) closeModal(); });
 
 // ---------- IndexedDB（iPhoneの中の保存場所） ----------
 const idb = {
@@ -184,7 +185,7 @@ function setChrome(title, tab, back) {
 function route() {
   S.routeId = (S.routeId || 0) + 1;
   stopPlayer();
-  document.body.classList.remove('video-mode');
+  document.body.classList.remove('video-mode', 'review-mode');
   closeModal();
   window.scrollTo(0, 0);
   const [, page, arg] = location.hash.split('/');
@@ -198,23 +199,28 @@ function route() {
 }
 
 // ---------- 動画の一覧 ----------
-function statusOf(v) { return v.status === 'ready' ? 'ready' : (S.localReq[v.youtubeId] || S.localTx[v.youtubeId] || v.status === 'requested') ? 'requested' : 'pending'; }
+// このiPhoneで「送信した」と記録した依頼。3日たっても一覧に反映されなければ、届かなかったとみなす
+const fresh = ts => !!ts && Date.now() - ts < 3 * 864e5;
+function statusOf(v) { return v.status === 'ready' ? 'ready' : (fresh(S.localReq[v.youtubeId]) || fresh(S.localTx[v.youtubeId]) || v.status === 'requested') ? 'requested' : 'pending'; }
 const isDone = v => v.status === 'ready' && !!S.progress[v.file]?.doneAt;
-const hasTranscript = v => !!(v.transcript || S.localTx[v.youtubeId]);
+const hasTranscript = v => !!(v.transcript || fresh(S.localTx[v.youtubeId]));
+// 毎朝7:17ごろ Claude が準備する。それより前なら今朝、後なら明日の朝
+const prepWhen = () => { const d = new Date(), m = d.getHours() * 60 + d.getMinutes(); return m < 7 * 60 + 10 ? '今朝' : '明日の朝'; };
 // TED は Claude が公式の文字起こしを取る。それ以外は文字起こしを貼って送る
 const needsPaste = v => v.menu !== 'ted';
 function badgeOf(v) {
   const st = statusOf(v);
-  if (st === 'ready') return isDone(v) ? ['done', '完了 ✓'] : ['ready', '練習できる'];
-  if (st === 'requested') return needsPaste(v) && !hasTranscript(v) ? ['requested', '文字起こし待ち'] : ['requested', '依頼済み'];
-  return ['pending', '準備中'];
+  if (st === 'ready') return isDone(v) ? ['done', '完了 ✓'] : ['ready', ''];
+  if (st === 'requested') return needsPaste(v) && !hasTranscript(v) ? ['requested', '文字起こし待ち'] : ['requested', `${prepWhen()}7時ごろ準備`];
+  return ['pending', '未依頼'];
 }
 function renderList(menu) {
   setChrome(MENUS[menu], menu);
   const vids = (S.catalog.videos || []).filter(v => (MENUS[v.menu] ? v.menu : 'chloe') === menu && v.embeddable !== false);
   const ready = vids.filter(v => v.status === 'ready' && !isDone(v));
   const done = vids.filter(isDone).sort((a, b) => S.progress[b.file].doneAt.localeCompare(S.progress[a.file].doneAt));
-  const waiting = vids.filter(v => v.status !== 'ready').sort((a, b) => (statusOf(a) === 'requested' ? -1 : 0) - (statusOf(b) === 'requested' ? -1 : 0));
+  const queued = vids.filter(v => v.status !== 'ready' && statusOf(v) === 'requested');
+  const cand = vids.filter(v => v.status !== 'ready' && statusOf(v) !== 'requested');
   const card = v => {
     const st = statusOf(v);
     const p = S.progress[v.file];
@@ -225,12 +231,15 @@ function renderList(menu) {
     const inner = `<img loading="lazy" src="https://i.ytimg.com/vi/${esc(v.youtubeId)}/mqdefault.jpg" alt="">
       <div><div class="t">${esc(v.title || v.youtubeId)}</div>${v.titleJa ? `<div class="tj">${esc(v.titleJa)}</div>` : ''}
       <div class="muted">${esc(info)}</div>
-      <div style="margin-top:4px"><span class="badge ${bc}">${bt}</span>
+      <div style="margin-top:4px">${bt ? `<span class="badge ${bc}">${bt}</span>` : ''}
       ${p?.at ? `<span class="muted"> 練習 ${esc(String(p.count || 1))}回 · ${esc(mdLabel(String(p.at)))}</span>` : ''}</div></div>`;
     if (st === 'ready') return `<a class="card vid" href="#/video/${esc(v.file)}">${inner}</a>`;
+    // 依頼済みの動画は、もう一度送るボタンを小さく出すだけにする（二重の依頼を防ぐ）
+    const sentTs = needsPaste(v) ? (S.localTx[v.youtubeId] || v.transcriptAt) : (S.localReq[v.youtubeId] || v.requestedAt);
+    const sentLine = sentTs ? `<span class="muted sent-line">${esc(mdLabel(typeof sentTs === 'number' ? ymd(new Date(sentTs)) : String(sentTs)))} 送信済み</span>` : '';
     const main = needsPaste(v)
-      ? `<button class="btn ${hasTranscript(v) ? 'ghost' : 'secondary'}" data-tx="${esc(v.youtubeId)}">${hasTranscript(v) ? '文字起こしを送り直す' : '文字起こしを貼る'}</button>`
-      : st === 'pending' ? `<button class="btn secondary" data-req="${esc(v.youtubeId)}">準備を依頼</button>` : `<button class="btn ghost" data-req="${esc(v.youtubeId)}">依頼の方法を見る</button>`;
+      ? (hasTranscript(v) ? `${sentLine}<button class="btn ghost" data-tx="${esc(v.youtubeId)}">送り直す</button>` : `<button class="btn secondary" data-tx="${esc(v.youtubeId)}">文字起こしを貼る</button>`)
+      : st === 'pending' ? `<button class="btn secondary" data-req="${esc(v.youtubeId)}">準備を依頼</button>` : `${sentLine}<button class="btn ghost" data-req="${esc(v.youtubeId)}">送り直す</button>`;
     return `<div class="card"><div class="vid">${inner}</div>
       <div class="vid-actions">${main}
       <a class="btn ghost" href="https://www.youtube.com/watch?v=${esc(v.youtubeId)}" target="_blank" rel="noopener">YouTubeで見る</a></div></div>`;
@@ -239,14 +248,17 @@ function renderList(menu) {
     $('#main').innerHTML = '<div class="card empty">読み込み中…</div>';
     return;
   }
-  const emptyReady = menu === 'chloe' ? '上の「＋ URLで動画を追加」から見たい動画を追加するか、下の「準備中」から文字起こしを貼ってください。'
-    : '下の「準備中」から動画を選んで依頼してください。';
+  const emptyReady = menu === 'chloe' ? '上の「＋ URLで動画を追加」から見たい動画を追加するか、下の「候補」から文字起こしを貼ってください。'
+    : '下の「候補」から動画を選んで依頼してください。';
   $('#main').innerHTML = `
     <button class="btn secondary block" id="addUrl" style="margin-top:4px">＋ URLで動画を追加</button>
     <div class="section-title">練習できる（${ready.length}）</div>
     ${ready.map(card).join('') || `<div class="card empty">${done.length ? 'すべて完了しました。' : 'まだありません。'}${emptyReady}</div>`}
-    <div class="section-title">準備中（${waiting.length}）</div>
-    ${waiting.map(card).join('') || `<div class="card empty">${S.catalog.updatedAt ? '新しい動画はありません' : '動画一覧はまだ作られていません'}</div>`}
+    ${queued.length ? `<div class="section-title">準備待ち（${queued.length}）</div>
+    <p class="muted section-note">毎朝7時ごろ、Claudeが訳・チャプター・発音のヒントをつけて「練習できる」にします。「文字起こし待ち」の動画は、文字起こしを貼ってください。</p>
+    ${queued.map(card).join('')}` : ''}
+    <div class="section-title">候補（${cand.length}）</div>
+    ${cand.map(card).join('') || `<div class="card empty">${S.catalog.updatedAt ? '新しい動画はありません' : '動画一覧はまだ作られていません'}</div>`}
     ${done.length ? `<div class="section-title">完了（${done.length}）</div>${done.map(card).join('')}` : ''}
     ${S.catalog.updatedAt ? `<p class="muted" style="text-align:center">一覧の更新：${mdLabel(S.catalog.updatedAt)}（毎週月曜に自動更新）</p>` : ''}`;
   const find = id => vids.find(v => v.youtubeId === id);
@@ -281,17 +293,28 @@ async function openIssue(title, payload, onSent) {
     el.querySelector('#ghLink').onclick = () => {
       // コピーはボタンを押したその場でしないと、iPhoneでは許可されない
       if (paste) navigator.clipboard?.writeText(body).catch(() => toast('コピーできませんでした。もう一度押してください', 4000));
-      setTimeout(() => { closeModal(); onSent && onSent(); }, 400);
+      // 実際に送信できたかはアプリからは分からないので、戻ってきた時に確かめる
+      setTimeout(() => confirmSent(onSent), 400);
     };
     el.querySelector('#cancel').onclick = closeModal;
   });
   return true;
 }
 
+function confirmSent(onSent) {
+  modal(`<h2>送信できましたか？</h2>
+    <p>GitHubで<b>いちばん下の緑のボタン</b>（「Create」または「Submit new issue」）を押したら、「送信した」を押してください。</p>
+    <div class="row" style="margin-top:14px"><button class="btn" id="yes" style="flex:1">送信した</button><button class="btn secondary" id="no" style="flex:1">まだ・やめた</button></div>
+    <p class="muted">ログイン画面が出て送れなかった時は「まだ・やめた」を押して、ログインしてからもう一度送ってください。</p>`, el => {
+    el.querySelector('#yes').onclick = () => { closeModal(); onSent && onSent(); };
+    el.querySelector('#no').onclick = () => { closeModal(); toast('送信はしていません。送る時は、もう一度アプリから送ってください', 4000); };
+  }, { sticky: true });
+}
+
 function requestVideo(v) {
   if (needsPaste(v)) return pasteTranscript(v);
   modal(`<h2>準備を依頼</h2><p><b>${esc(v.title || v.youtubeId)}</b></p>
-    <p>GitHubで依頼を送ると、翌朝7時ごろClaudeが文字起こし・翻訳・チャプター・発音のヒントを用意します。</p>
+    <p>GitHubで依頼を送ると、${prepWhen()}7時ごろClaudeが文字起こし・翻訳・チャプター・発音のヒントを用意します。</p>
     <p class="muted">GitHubにログインしていない場合は、先にログインしてください。</p>
     <div class="row" style="margin-top:12px"><button class="btn" id="go">GitHubで依頼を送る</button><button class="btn ghost" id="cancel">閉じる</button></div>`, el => {
     el.querySelector('#cancel').onclick = closeModal;
@@ -312,22 +335,45 @@ function checkTranscript(text) {
   if (times < 2) return { err: '時刻（0:05 など）が入っていません。YouTubeの文字起こしを時刻ごとコピーしてください' };
   const words = text.replace(/(^|\n)\s*(\d{1,2}:)?\d{1,2}:\d{2}/g, '').replace(/\s+/g, ' ').trim();
   if (words.length < 20) return { err: '英文が短すぎます。文字起こしを全部コピーしてください' };
-  return { text, times };
+  return { text, times, words: words.split(' ').length };
+}
+// 文字起こしの欄：貼った時点で中身を確かめて見せる。クリップボードから貼るボタンもつける
+const TX_FIELD = (rows, label) => `<label class="field">${label}<textarea id="tx" rows="${rows}" placeholder="0:00&#10;Hello everyone...&#10;0:04&#10;..."></textarea></label>
+  <div class="row wrap tx-tools"><button class="btn secondary" id="pasteClip" type="button">📋 クリップボードから貼る</button><span id="txok" class="muted"></span></div>`;
+function bindTxField(el, optional) {
+  const ta = el.querySelector('#tx'), ok = el.querySelector('#txok');
+  $('#modal').dataset.sticky = '1'; // 貼った文字が外側のタップで消えないように
+  const check = () => {
+    const raw = ta.value.trim();
+    if (!raw) { ok.textContent = ''; ok.className = 'muted'; return; }
+    const c = checkTranscript(raw);
+    ok.className = c.err ? 'tx-bad' : 'tx-good';
+    ok.textContent = c.err ? c.err : `✓ 時刻 ${c.times.toLocaleString()}か所・約${c.words.toLocaleString()}語`;
+  };
+  ta.addEventListener('input', check);
+  el.querySelector('#pasteClip').onclick = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (!t.trim()) { toast('クリップボードが空です'); return; }
+      ta.value = t; check();
+    } catch { toast('貼れませんでした。欄を長押しして「ペースト」してください', 4000); }
+  };
 }
 async function sendTranscript(v, text) {
   return openIssue('文字起こし', { type: 'transcript', youtubeId: v.youtubeId, menu: v.menu, title: v.title || '', text }, async () => {
     S.localTx[v.youtubeId] = Date.now(); await idb.set('localTx', S.localTx);
-    toast('送信すると、翌朝7時ごろClaudeが訳とチャプターをつけて準備します', 4500);
+    toast(`${prepWhen()}7時ごろ、Claudeが訳とチャプターをつけて準備します`, 4500);
     if (MENUS[location.hash.split('/')[1]]) route();
   });
 }
 function pasteTranscript(v) {
   modal(`<h2>文字起こしを貼る</h2><p><b>${esc(v.title || v.youtubeId)}</b></p>
-    ${TX_HELP}
-    <label class="field">文字起こし<textarea id="tx" rows="8" placeholder="0:00&#10;Hello everyone...&#10;0:04&#10;..."></textarea></label>
+    <details><summary class="muted">コピーのしかた</summary>${TX_HELP}</details>
+    ${TX_FIELD(8, '文字起こし')}
     <p class="err" id="e"></p>
-    <p class="muted">送ると暗号化して保存され、翌朝7時ごろClaudeが訳・チャプター・発音のヒントをつけて「練習できる」にします。</p>
+    <p class="muted">送ると暗号化して保存され、${prepWhen()}7時ごろClaudeが訳・チャプター・発音のヒントをつけて「練習できる」にします。</p>
     <div class="row"><button class="btn" id="go">GitHubで送る</button><button class="btn ghost" id="cancel">閉じる</button></div>`, el => {
+    bindTxField(el);
     el.querySelector('#cancel').onclick = closeModal;
     el.querySelector('#go').onclick = async () => {
       const c = checkTranscript(el.querySelector('#tx').value);
@@ -357,9 +403,10 @@ function addByUrl(menu) {
     <div id="tedBox"><label class="row" style="font-size:14px;margin:10px 0"><input type="checkbox" id="r" checked style="width:auto"> 準備の依頼もする（ClaudeがTEDの公式の文字起こしを取ります）</label></div>
     <div id="txBox"><p class="muted" style="margin:10px 0 0">TED以外は、YouTubeの文字起こしを貼って送ると準備できます。あとから一覧の「文字起こしを貼る」で送ることもできます。</p>
       <details><summary class="muted">コピーのしかた</summary>${TX_HELP}</details>
-      <label class="field">文字起こし（あれば）<textarea id="tx" rows="6" placeholder="0:00&#10;Hello everyone..."></textarea></label></div>
+      ${TX_FIELD(6, '文字起こし（あれば）')}</div>
     <p class="err" id="e"></p>
     <div class="row"><button class="btn" id="go">GitHubで送る</button><button class="btn ghost" id="cancel">閉じる</button></div>`, el => {
+    bindTxField(el);
     const sel = el.querySelector('#m');
     const paint = () => { const ted = sel.value === 'ted'; el.querySelector('#tedBox').hidden = !ted; el.querySelector('#txBox').hidden = ted; };
     sel.onchange = paint; paint();
@@ -409,6 +456,36 @@ const sentAt = i => {
 const chapterOf = i => S.video.chapters.findIndex(c => i >= c.from && i <= c.to);
 const chapAt = c => { const ch = S.video.chapters[c]; return { ...ch, start: sentAt(ch.from).start, end: sentAt(ch.to).end }; };
 
+// 7ステップのシャドーイング。押すと表示と再生のしかたをそのステップ用に切り替える
+const STEPS = [
+  { n: '意味', tip: '訳だけを見て、意味を確かめながら聞きます', s: { showEn: false, showJa: true, showHints: false, mode: 'continuous' } },
+  { n: '音と文字', tip: '英文を見ながら、音と文字を合わせて聞きます', s: { showEn: true, showJa: false, showHints: false, mode: 'continuous' } },
+  { n: 'ヒント', tip: 'かたまり（/）・つながる音・強く読む語を確かめます。1文ごとに止まります', s: { showEn: true, showJa: false, showHints: true, mode: 'stop' } },
+  { n: '1文ずつ', tip: '1文ごとに止まるので、まねて言ってから ▶︎ を押します', s: { showEn: true, showJa: false, showHints: false, mode: 'stop' } },
+  { n: 'かぶせる', tip: '英文を見ながら、音声にかぶせて一緒に言います', s: { showEn: true, showJa: false, showHints: false, mode: 'continuous' } },
+  { n: '音だけ', tip: '英文を隠して、音声だけでシャドーイングします', s: { showEn: false, showJa: false, showHints: false, mode: 'continuous' } },
+  { n: '速く', tip: '速さを1.25倍以上にして、音声だけでシャドーイングします（＋−で調整）', s: { showEn: false, showJa: false, showHints: false, mode: 'continuous' }, faster: true },
+];
+const stepMatches = k => Object.entries(STEPS[k].s).every(([key, val]) => S.settings[key] === val);
+function applyStep(k, quiet) {
+  const st = STEPS[k], d = S.video;
+  Object.assign(S.settings, st.s);
+  if (st.faster && rateFor().rate < 1.25) {
+    const orig = d.chapters[S.chapter].wpm || d.wpm || 150;
+    S.settings.targetWpm = Math.round(orig * 1.25);
+  } else if (!st.faster && rateFor().rate > 1) S.settings.targetWpm = null; // ステップ7で上げた速さは元に戻す（遅くした設定はそのまま）
+  S.stopAt = null; S.revealed = new Set();
+  saveSettings();
+  const p = S.progress[d.file] ||= {}; p.step = k; idb.set('progress', S.progress);
+  if (!quiet) { paintControls(); renderSentences(); applyRate(); }
+}
+function paintSteps() {
+  const k = S.progress[S.video.file]?.step, on = k != null && stepMatches(k);
+  document.querySelectorAll('#steps button').forEach(b => b.classList.toggle('on', on && Number(b.dataset.k) === k));
+  $('#stepTip').textContent = on ? `ステップ${k + 1}：${STEPS[k].tip}` : '';
+  $('#stepTip').hidden = !on;
+}
+
 async function renderVideo(file, startAt) {
   const entry = (S.catalog.videos || []).find(v => v.file === file);
   setChrome(entry?.title || '練習', entry?.menu || 'chloe', `#/${entry?.menu || 'chloe'}`);
@@ -428,10 +505,14 @@ async function renderVideo(file, startAt) {
   else if (p?.sentence != null) startIdx = p.sentence;
   startIdx = Math.min(Math.max(0, Number(startIdx) || 0), d.sentences.length - 1);
   S.chapter = Math.max(0, chapterOf(startIdx));
+  // 前回このビデオで使ったステップに合わせる
+  if (p?.step != null && STEPS[p.step]) applyStep(p.step, true);
   if (S.settings.mode === 'sentence') S.loopIdx = startIdx;
 
   $('#main').innerHTML = `
     <div class="player-wrap"><div class="ratio"><div id="yt"></div></div></div>
+    <div class="steps" id="steps"><span class="steps-label">ステップ</span>${STEPS.map((st, k) => `<button data-k="${k}"><b>${k + 1}</b> ${st.n}</button>`).join('')}</div>
+    <p class="step-tip" id="stepTip" hidden></p>
     <div class="toggles"><button data-t="showEn">英文</button><button data-t="showJa">訳</button><button data-t="showHints">ヒント</button></div>
     <div class="controls">
       <div class="seg" id="modes">
@@ -459,6 +540,7 @@ async function renderVideo(file, startAt) {
     const t = e.target.dataset.t; if (!t) return;
     S.settings[t] = !S.settings[t]; saveSettings(); S.revealed = new Set(); paintControls(); renderSentences();
   };
+  $('#steps').onclick = e => { const b = e.target.closest('[data-k]'); if (b) applyStep(Number(b.dataset.k)); };
   $('#slower').onclick = () => changeWpm(-1);
   $('#faster').onclick = () => changeWpm(+1);
   $('#speedVal').onclick = () => { S.settings.targetWpm = null; saveSettings(); applyRate(); };
@@ -558,7 +640,7 @@ function renderSentences() {
 function paintControls() {
   document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.m === S.settings.mode));
   document.querySelectorAll('.toggles button').forEach(b => b.classList.toggle('on', !!S.settings[b.dataset.t]));
-  paintSpeed();
+  paintSpeed(); paintSteps();
 }
 function rateFor() {
   const ch = S.video.chapters[S.chapter], orig = ch.wpm || S.video.wpm;
@@ -813,6 +895,8 @@ function renderReview() {
   let idx = 0, shown = false;
   const total = queue.length;
   const draw = () => {
+    // 答えのボタンは、親指で押しやすい画面の下に固定する
+    document.body.classList.toggle('review-mode', idx < total);
     if (idx >= total) {
       $('#main').innerHTML = `<div class="card flash"><div class="p">🎉</div><div class="m">${total ? `${total}個の復習が終わりました` : '今日の復習はありません'}</div>
         <div style="margin-top:18px"><a class="btn" href="#/vocab">単語帳に戻る</a></div></div>`;
@@ -822,8 +906,8 @@ function renderReview() {
     $('#main').innerHTML = `<div class="progressbar"><i style="width:${(idx / total) * 100}%"></i></div>
       <p class="muted" style="text-align:center">${idx + 1} / ${total}</p>
       <div class="card flash">${shown ? vocabBody(v) : `<div class="p">${esc(v.phrase)} <button class="speak" data-say="p">🔊</button></div><p class="muted" style="margin-top:16px">意味を思い出してから、答えを見てください</p>`}</div>
-      ${shown ? `<div class="row"><button class="btn danger block" id="ng" style="flex:1">忘れていた</button><button class="btn block" id="ok" style="flex:1">覚えていた</button></div>`
-        : `<button class="btn block" id="show">答えを見る</button>`}`;
+      <div class="bottom-bar">${shown ? `<div class="row"><button class="btn danger block" id="ng" style="flex:1">忘れていた</button><button class="btn block" id="ok" style="flex:1">覚えていた</button></div>`
+        : `<button class="btn block" id="show">答えを見る</button>`}</div>`;
     bindSay($('#main'), v);
     $('#main').querySelectorAll('a[href^="#/video"]').forEach(a => a.remove()); // 復習中は動画に移動しない
     if (!shown) $('#show').onclick = () => { shown = true; draw(); };
@@ -838,7 +922,7 @@ function renderReview() {
       if (v.stage >= INTERVALS.length - 1) { v.mastered = true; v.due = null; }
       else { v.stage += 1; v.due = addDays(INTERVALS[v.stage]); }
     } else { v.stage = 0; v.due = addDays(INTERVALS[0]); }
-    saveVocab(); idx++; shown = false; draw();
+    saveVocab(); updateBadge(); idx++; shown = false; draw(); window.scrollTo(0, 0);
   };
   draw();
 }
@@ -880,6 +964,7 @@ async function renderSettings() {
         <li>英文を隠して、音声だけでシャドーイング</li>
         <li>速さ（WPM）を上げて、会議の速さに慣れる</li>
       </ol>
+      <p class="muted" style="margin:8px 0 0">練習画面の「ステップ 1〜7」を押すと、英文・訳の表示と再生のしかたがそのステップ用に切り替わります。</p>
     </div>
     <div class="section-title">アカウント</div>
     <div class="card"><button class="btn danger" id="logout">ログアウト</button>
