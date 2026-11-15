@@ -8,8 +8,8 @@ const REPO = (() => {
   return { owner: 'masa-git-code', name: 'shadowing' };
 })();
 const INTERVALS = [1, 2, 4, 7, 15, 30]; // 忘却曲線にもとづく復習の間隔（日）
-// chloe は画面では「Artists」（以前のデータと合わせるため、中の名前は chloe のまま）
-const MENUS = { chloe: 'Artists', ted: 'TED', youtube: 'YouTube' };
+// chloe は画面では「YouTube」（TED 以外の YouTube 動画。以前のデータと合わせるため、中の名前は chloe のまま）
+const MENUS = { chloe: 'YouTube', ted: 'TED' };
 const DEFAULT_SETTINGS = { showEn: true, showJa: true, showHints: false, mode: 'continuous', targetWpm: null };
 
 // ---------- 小さな道具 ----------
@@ -116,7 +116,7 @@ async function start() {
   window.addEventListener('hashchange', route);
   if (!location.hash) location.hash = '#/chloe';
   route();
-  loadCatalog().then(() => { if (/^#\/(chloe|ted|youtube)?$/.test(location.hash)) route(); });
+  loadCatalog().then(() => { if (/^#\/(chloe|ted)?$/.test(location.hash)) route(); });
   importInbox();
 }
 
@@ -206,7 +206,7 @@ function badgeOf(v) {
 }
 function renderList(menu) {
   setChrome(MENUS[menu], menu);
-  const vids = (S.catalog.videos || []).filter(v => v.menu === menu && v.embeddable !== false);
+  const vids = (S.catalog.videos || []).filter(v => (MENUS[v.menu] ? v.menu : 'chloe') === menu && v.embeddable !== false);
   const ready = vids.filter(v => v.status === 'ready' && !isDone(v));
   const done = vids.filter(isDone).sort((a, b) => S.progress[b.file].doneAt.localeCompare(S.progress[a.file].doneAt));
   const waiting = vids.filter(v => v.status !== 'ready').sort((a, b) => (statusOf(a) === 'requested' ? -1 : 0) - (statusOf(b) === 'requested' ? -1 : 0));
@@ -230,16 +230,16 @@ function renderList(menu) {
       <div class="vid-actions">${main}
       <a class="btn ghost" href="https://www.youtube.com/watch?v=${esc(v.youtubeId)}" target="_blank" rel="noopener">YouTubeで見る</a></div></div>`;
   };
-  const emptyReady = menu === 'youtube' ? '下の「＋ URLで動画を追加」から、見たいYouTube動画を追加してください。'
+  const emptyReady = menu === 'chloe' ? '上の「＋ URLで動画を追加」から見たい動画を追加するか、下の「準備中」から文字起こしを貼ってください。'
     : '下の「準備中」から動画を選んで依頼してください。';
   $('#main').innerHTML = `
     <button class="btn secondary block" id="addUrl" style="margin-top:4px">＋ URLで動画を追加</button>
     <div class="section-title">練習できる（${ready.length}）</div>
     ${ready.map(card).join('') || `<div class="card empty">${done.length ? 'すべて完了しました。' : 'まだありません。'}${emptyReady}</div>`}
     <div class="section-title">準備中（${waiting.length}）</div>
-    ${waiting.map(card).join('') || `<div class="card empty">${menu === 'youtube' ? '準備中の動画はありません' : S.catalog.updatedAt ? '新しい動画はありません' : '動画一覧はまだ作られていません'}</div>`}
+    ${waiting.map(card).join('') || `<div class="card empty">${S.catalog.updatedAt ? '新しい動画はありません' : '動画一覧はまだ作られていません'}</div>`}
     ${done.length ? `<div class="section-title">完了（${done.length}）</div>${done.map(card).join('')}` : ''}
-    ${S.catalog.updatedAt && menu !== 'youtube' ? `<p class="muted" style="text-align:center">一覧の更新：${mdLabel(S.catalog.updatedAt)}（毎週月曜に自動更新）</p>` : ''}`;
+    ${S.catalog.updatedAt ? `<p class="muted" style="text-align:center">一覧の更新：${mdLabel(S.catalog.updatedAt)}（毎週月曜に自動更新）</p>` : ''}`;
   const find = id => vids.find(v => v.youtubeId === id);
   $('#main').querySelectorAll('[data-req]').forEach(b => { b.onclick = () => requestVideo(find(b.dataset.req)); });
   $('#main').querySelectorAll('[data-tx]').forEach(b => { b.onclick = () => pasteTranscript(find(b.dataset.tx)); });

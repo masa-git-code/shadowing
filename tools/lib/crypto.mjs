@@ -36,8 +36,8 @@ export async function open(key, env) {
   return JSON.parse(new TextDecoder().decode(pt));
 }
 
-// メニュー（chloe は画面では「Artists」。以前のデータと合わせるため名前は変えない）
-export const MENU_KEYS = ['chloe', 'ted', 'youtube'];
+// メニュー（chloe は画面では「YouTube」＝TED 以外の YouTube 動画。以前のデータと合わせるため名前は変えない）
+export const MENU_KEYS = ['chloe', 'ted'];
 export const menuOf = m => MENU_KEYS.includes(m) ? m : 'chloe';
 
 export const randomB64 = n => b64e(crypto.getRandomValues(new Uint8Array(n)));

@@ -6,7 +6,7 @@
 ```json
 {
   "youtubeId": "R1vskiVDwl4",
-  "menu": "ted",                       // "ted" / "chloe"（画面では Artists）/ "youtube"
+  "menu": "ted",                       // "ted" か "chloe"（画面では YouTube）
   "title": "Celeste Headlee: 10 ways to have a better conversation",
   "titleJa": "より良い会話をする10の方法",
   "chapters": [
