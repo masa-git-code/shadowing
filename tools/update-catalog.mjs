@@ -5,7 +5,7 @@
 // 4. data/videos/ にある練習データを一覧に反映する
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, DATA, loadMeta, readSealed, writeSealed, readJSON, writeJSON, open, fileIdFor, MENU_KEYS } from './lib/crypto.mjs';
+import { ROOT, DATA, loadMeta, readSealed, writeSealed, readJSON, writeJSON, open, fileIdFor, MENU_KEYS, menuOf } from './lib/crypto.mjs';
 
 const UA = { 'User-Agent': 'Mozilla/5.0 (shadowing-app catalog bot)', 'Accept-Language': 'en' };
 const log = (...a) => console.log(...a);
@@ -132,6 +132,7 @@ async function main() {
   // 準備中が増えすぎないように、メニューごとに新しい順で残す
   const keep = sources.keepPendingPerMenu || 40;
   const ts = v => v.publishedAt || v.addedAt || '';
+  for (const v of cat.videos) v.menu = menuOf(v.menu); // 古い名前（artists / youtube）を chloe にそろえる
   for (const menu of MENU_KEYS) {
     // 自分で追加した動画と最初から入れた動画は残す
     const pend = cat.videos.filter(v => v.menu === menu && v.status === 'pending' && !v.addedBy).sort((a, b) => ts(b).localeCompare(ts(a)));
