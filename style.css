@@ -135,12 +135,39 @@ body.video-mode #tabbar { display: none !important; }
 .err { color: var(--bad); font-size: 13px; min-height: 1.4em; }
 body.video-mode #toast { bottom: calc(130px + var(--safe-b)); }
 
+/* 練習のステップ */
+.steps { display: flex; gap: 6px; overflow-x: auto; padding: 10px 0 2px; scrollbar-width: none; align-items: center; }
+.steps::-webkit-scrollbar { display: none; }
+.steps-label { flex: none; font-size: 12px; color: var(--sub); font-weight: 600; }
+.steps button { flex: none; border: 1px solid var(--line); background: var(--card); border-radius: 999px; min-height: 36px; padding: 4px 12px; font-size: 13px; color: var(--ink); white-space: nowrap; }
+.steps button b { color: var(--accent); margin-right: 2px; }
+.steps button.on { border-color: var(--accent); background: var(--accent); color: #fff; }
+.steps button.on b { color: #fff; }
+.step-tip { margin: 6px 2px 0; font-size: 13px; color: var(--ink); background: var(--accent-soft); border-radius: 10px; padding: 7px 10px; }
+
+/* 一覧の補足と送信済みの表示 */
+.section-note { margin: -4px 4px 8px; }
+.sent-line { align-self: center; }
+
+/* 文字起こしの確認 */
+.tx-tools { margin-top: -4px; }
+.tx-tools .btn { padding: 8px 12px; font-size: 14px; }
+.tx-good { color: var(--good); font-size: 13px; font-weight: 600; }
+.tx-bad { color: var(--bad); font-size: 13px; }
+
+/* 復習：答えのボタンを画面の下に固定 */
+body.review-mode { padding-bottom: calc(84px + var(--safe-b)); }
+body.review-mode #tabbar { display: none !important; }
+.bottom-bar { position: fixed; inset: auto 0 0 0; z-index: 20; padding: 10px 14px calc(10px + var(--safe-b)); background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid var(--line); }
+.bottom-bar > * { max-width: 640px; margin-left: auto; margin-right: auto; }
+.bottom-bar .btn { min-height: 52px; font-size: 16px; }
+
 /* iPhone SE（幅320）でも次の文ボタンが画面に収まるように */
 @media (max-width: 359px) { .ctl-row { gap: 4px; } .speed .val { min-width: 64px; } .speed button { min-width: 30px; } .transport { gap: 4px; } .transport button { width: 38px; height: 38px; } .transport button.play { width: 46px; height: 46px; } }
 
 /* ダークモード：白文字が読める濃さの青、目にまぶしくない色 */
 @media (prefers-color-scheme: dark) {
-  .btn:not(.secondary):not(.ghost):not(.danger), .transport button.play, .done-btn.on { background: #3b6fe0; }
+  .btn:not(.secondary):not(.ghost):not(.danger), .transport button.play, .done-btn.on, .steps button.on { background: #3b6fe0; }
   .badge.ready { background: #12341f; } .badge.requested { background: #3a2a0a; } .btn.danger { background: #3b1414; }
   #modal { background: rgba(0,0,0,.6); } #modal .sheet { background: var(--card); }
 }
