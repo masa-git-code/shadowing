@@ -272,12 +272,15 @@ function renderList(menu) {
 // 準備ができたらリンクのボタンを出して、もう一度押してもらう
 // 長い依頼（文字起こし）はURLに入らないので、本文をコピーしてGitHubの本文の欄に貼ってもらう
 const ISSUE_URL_MAX = 6000, ISSUE_BODY_MAX = 65000;
+const issueBody = env => `アプリからの依頼です（中身は暗号化されています）。\n\n\`\`\`json\n${JSON.stringify(env)}\n\`\`\``;
+const issueBase = title => `https://github.com/${REPO.owner}/${REPO.name}/issues/new?title=${encodeURIComponent(title)}`;
+const issueUrl = (title, body) => `${issueBase(title)}&body=${encodeURIComponent(body)}`;
 async function openIssue(title, payload, onSent) {
   const env = payload.type === 'transcript' ? await sealZ(S.key, payload) : await seal(S.key, payload);
-  const body = `アプリからの依頼です（中身は暗号化されています）。\n\n\`\`\`json\n${JSON.stringify(env)}\n\`\`\``;
+  const body = issueBody(env);
   if (body.length > ISSUE_BODY_MAX) { toast('長すぎて送れません。動画を短く分けるか、Claudeのチャットに貼ってください', 5000); return false; }
-  const base = `https://github.com/${REPO.owner}/${REPO.name}/issues/new?title=${encodeURIComponent(title)}`;
-  const full = `${base}&body=${encodeURIComponent(body)}`;
+  const base = issueBase(title);
+  const full = issueUrl(title, body);
   const paste = full.length > ISSUE_URL_MAX;
   modal(`<h2>GitHubで送信（${esc(title)}）</h2>
     ${paste
@@ -301,13 +304,13 @@ async function openIssue(title, payload, onSent) {
   return true;
 }
 
-function confirmSent(onSent) {
+function confirmSent(onSent, noMsg) {
   modal(`<h2>送信できましたか？</h2>
     <p>GitHubで<b>いちばん下の緑のボタン</b>（「Create」または「Submit new issue」）を押したら、「送信した」を押してください。</p>
     <div class="row" style="margin-top:14px"><button class="btn" id="yes" style="flex:1">送信した</button><button class="btn secondary" id="no" style="flex:1">まだ・やめた</button></div>
     <p class="muted">ログイン画面が出て送れなかった時は「まだ・やめた」を押して、ログインしてからもう一度送ってください。</p>`, el => {
     el.querySelector('#yes').onclick = () => { closeModal(); onSent && onSent(); };
-    el.querySelector('#no').onclick = () => { closeModal(); toast('送信はしていません。送る時は、もう一度アプリから送ってください', 4000); };
+    el.querySelector('#no').onclick = () => { closeModal(); toast(noMsg || '送信はしていません。送る時は、もう一度アプリから送ってください', 4500); };
   }, { sticky: true });
 }
 
@@ -359,12 +362,57 @@ function bindTxField(el, optional) {
     } catch { toast('貼れませんでした。欄を長押しして「ペースト」してください', 4000); }
   };
 }
+// 文字起こしは URL に入る大きさに分けて、何回かに分けて送る（本文の欄へのペーストはしない）
+// iPhone はボタンを押してから時間のかかる処理をはさむと画面を開けないので、先に全部のリンクを作っておく
+function splitLines(text, n) {
+  const lines = text.split('\n'), size = text.length / n, out = [];
+  let cur = [], len = 0;
+  for (const l of lines) {
+    if (len >= size * (out.length + 1) && out.length < n - 1 && cur.length) { out.push(cur.join('\n')); cur = []; }
+    cur.push(l); len += l.length + 1;
+  }
+  out.push(cur.join('\n'));
+  return out;
+}
+async function transcriptLinks(v, text) {
+  const sid = Array.from(crypto.getRandomValues(new Uint8Array(6)), b => b.toString(16).padStart(2, '0')).join('');
+  const base = { type: 'transcript', youtubeId: v.youtubeId, menu: v.menu, title: v.title || '' };
+  for (let n = 1; n <= 30; n++) {
+    const chunks = splitLines(text, n), links = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const payload = n === 1 ? { ...base, text: chunks[i] } : { ...base, sid, part: i + 1, parts: n, text: chunks[i] };
+      const title = n === 1 ? '文字起こし' : `文字起こし（${i + 1}/${n}）`;
+      const url = issueUrl(title, issueBody(await sealZ(S.key, payload)));
+      if (url.length > ISSUE_URL_MAX) break;
+      links.push({ title, url });
+    }
+    if (links.length === chunks.length) return links;
+  }
+  return null;
+}
 async function sendTranscript(v, text) {
-  return openIssue('文字起こし', { type: 'transcript', youtubeId: v.youtubeId, menu: v.menu, title: v.title || '', text }, async () => {
+  const done = async () => {
     S.localTx[v.youtubeId] = Date.now(); await idb.set('localTx', S.localTx);
     toast(`${prepWhen()}7時ごろ、Claudeが訳とチャプターをつけて準備します`, 4500);
     if (MENUS[location.hash.split('/')[1]]) route();
-  });
+  };
+  const links = await transcriptLinks(v, text);
+  if (!links) return openIssue('文字起こし', { type: 'transcript', youtubeId: v.youtubeId, menu: v.menu, title: v.title || '', text }, done);
+  const step = i => {
+    const n = links.length, l = links[i];
+    modal(`<h2>GitHubで送信${n > 1 ? `（${i + 1}/${n}回目）` : ''}</h2>
+      ${n > 1 ? `<p>文字起こしが長いので、<b>${n}回に分けて</b>送ります。1回ごとにGitHubが開くので、そのたびに送信してアプリに戻ってください。</p>` : ''}
+      <p>下のボタンでGitHubが開きます。中身は入っているので、画面の<b>いちばん下の緑のボタン</b>（「Create」または「Submit new issue」）を押すだけです。</p>
+      <a class="btn block" id="ghLink" href="${esc(l.url)}" target="_blank" rel="noopener">GitHubを開く${n > 1 ? `（${i + 1}/${n}）` : ''}</a>
+      <p class="muted">GitHubのログイン画面が出たら、ログインしてから、もう一度アプリからやり直してください。</p>
+      <button class="btn ghost block" id="cancel">やめる</button>`, el => {
+      el.querySelector('#ghLink').onclick = () => setTimeout(() => confirmSent(() => i + 1 < n ? step(i + 1) : done(),
+        n > 1 && i > 0 ? `${i}/${n}回目まで送りました。続きを送る時は、もう一度アプリから最初から送ってください` : null), 400);
+      el.querySelector('#cancel').onclick = closeModal;
+    }, { sticky: true });
+  };
+  step(0);
+  return true;
 }
 function pasteTranscript(v) {
   modal(`<h2>文字起こしを貼る</h2><p><b>${esc(v.title || v.youtubeId)}</b></p>

@@ -33,6 +33,7 @@ jobs:
             : > /tmp/out
             GITHUB_OUTPUT=/tmp/out node tools/handle-issue.mjs || true
             RESULT=$(sed -n 's/^result=//p' /tmp/out | tail -1)
+            DETAIL=$(sed -n 's/^detail=//p' /tmp/out | tail -1)
             git add data
             if git diff --cached --quiet; then echo "変更なし"; break; fi
             git commit -q -m "Handle app request"
@@ -40,21 +41,25 @@ jobs:
             RESULT=pushfailed; sleep $((i * 5))
           done
           echo "result=$RESULT" >> "$GITHUB_OUTPUT"
+          echo "detail=$DETAIL" >> "$GITHUB_OUTPUT"
       - name: Close
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ steps.h.outputs.result }}
+          DETAIL: ${{ steps.h.outputs.detail }}
         run: |
           case "$RESULT" in
             subscribed) MSG="通知を登録しました。毎朝9時に届きます。" ;;
             request) MSG="準備の依頼を受け付けました。翌朝7時ごろClaudeが準備します。" ;;
             add) MSG="動画を一覧に追加しました。" ;;
             transcript) MSG="文字起こしを受け取りました。翌朝7時ごろClaudeが訳とチャプターをつけて準備します。" ;;
+            transcriptpart) MSG="文字起こしの一部（${DETAIL}）を受け取りました。残りもアプリから送ってください。" ;;
             notfound) MSG="一覧にない動画でした。" ;;
-            pushfailed|error|"")
-              gh issue comment ${{ github.event.issue.number }} -R ${{ github.repository }} -b "処理できませんでした（${RESULT:-error}）。アプリからもう一度送ってください。"
-              exit 0 ;;
-            *) MSG="処理できませんでした（$RESULT）。" ;;
+            empty) MSG="本文が空で届いたため、処理できませんでした。アプリからもう一度送ってください。" ;;
+            pushfailed|error|"") MSG="処理できませんでした（${RESULT:-error}）。アプリからもう一度送ってください。" ;;
+            *) MSG="処理できませんでした（$RESULT）。アプリからもう一度送ってください。" ;;
           esac
-          gh issue close ${{ github.event.issue.number }} -R ${{ github.repository }} -c "$MSG"
+          # 送った直後に閉じられていても結果が残るよう、先にコメントしてから閉じる
+          gh issue comment ${{ github.event.issue.number }} -R ${{ github.repository }} -b "$MSG"
+          gh issue close ${{ github.event.issue.number }} -R ${{ github.repository }} || true
