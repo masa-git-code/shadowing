@@ -65,6 +65,11 @@ async function main() {
       const have = Object.keys(p.got).length;
       if (have < parts) {
         await writeSealed(key, pname, p);
+        // 一覧にも「何回目まで届いたか」を残す（アプリが「残りを送ってください」と出す。朝の準備でも分かる）
+        let v = find();
+        if (!v) v = await insert('pending');
+        v.addedBy ||= 'user'; v.transcriptParts = `${have}/${parts}`; v.transcriptPartsAt = now;
+        await writeSealed(key, 'catalog.enc.json', cat);
         out('result', 'transcriptpart'); out('detail', `${have}/${parts}`); return;
       }
       text = Array.from({ length: parts }, (_, i) => p.got[i + 1]).join('\n').trim();
@@ -76,6 +81,7 @@ async function main() {
     let v = find();
     if (!v) v = await insert('requested'); else { v.addedBy ||= 'user'; markRequested(v); }
     v.transcript = fid; v.transcriptAt = now;
+    delete v.transcriptParts; delete v.transcriptPartsAt;
   } else { out('result', 'invalid'); return; }
   await writeSealed(key, 'catalog.enc.json', cat);
   out('result', msg.type);

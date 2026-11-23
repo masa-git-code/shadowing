@@ -202,9 +202,13 @@ function route() {
 // ---------- 動画の一覧 ----------
 // このiPhoneで「送信した」と記録した依頼。3日たっても一覧に反映されなければ、届かなかったとみなす
 const fresh = ts => !!ts && Date.now() - ts < 3 * 864e5;
-function statusOf(v) { return v.status === 'ready' ? 'ready' : (fresh(S.localReq[v.youtubeId]) || fresh(S.localTx[v.youtubeId]) || v.status === 'requested') ? 'requested' : 'pending'; }
+// 文字起こしの「送信した」は、GitHub で処理されて一覧に入るまでの間（30分）だけ信じる。その後は一覧（サーバー）の記録に従う
+const txFresh = ts => !!ts && Date.now() - ts < 30 * 60e3;
+function statusOf(v) { return v.status === 'ready' ? 'ready' : (fresh(S.localReq[v.youtubeId]) || txFresh(S.localTx[v.youtubeId]) || v.status === 'requested') ? 'requested' : 'pending'; }
 const isDone = v => v.status === 'ready' && !!S.progress[v.file]?.doneAt;
-const hasTranscript = v => !!(v.transcript || fresh(S.localTx[v.youtubeId]));
+const hasTranscript = v => !!(v.transcript || txFresh(S.localTx[v.youtubeId]));
+// 分けて送った文字起こしの一部だけが届いている（v.transcriptParts = "1/2"）
+const partialTx = v => !v.transcript && !txFresh(S.localTx[v.youtubeId]) && v.transcriptParts;
 // 毎朝7:17ごろ Claude が準備する。それより前なら今朝、後なら明日の朝
 const prepWhen = () => { const d = new Date(), m = d.getHours() * 60 + d.getMinutes(); return m < 7 * 60 + 10 ? '今朝' : '明日の朝'; };
 // TED は Claude が公式の文字起こしを取る。それ以外は文字起こしを貼って送る
@@ -212,6 +216,7 @@ const needsPaste = v => v.menu !== 'ted';
 function badgeOf(v) {
   const st = statusOf(v);
   if (st === 'ready') return isDone(v) ? ['done', '完了 ✓'] : ['ready', ''];
+  if (partialTx(v)) return ['requested', `文字起こし ${v.transcriptParts} 受信・残りを送ってください`];
   if (st === 'requested') return needsPaste(v) && !hasTranscript(v) ? ['requested', '文字起こし待ち'] : ['requested', `${prepWhen()}7時ごろ準備`];
   return ['pending', '未依頼'];
 }
@@ -227,7 +232,7 @@ function renderList(menu) {
     const p = S.progress[v.file];
     const [bc, bt] = badgeOf(v);
     const info = st === 'ready'
-      ? [v.durationSec ? `${Math.round(v.durationSec / 60)}分` : '', v.wpm ? `${v.wpm} WPM` : '', v.chapters ? `${v.chapters}チャプター` : ''].filter(Boolean).join(' · ')
+      ? [v.durationSec ? `${Math.max(1, Math.round(v.durationSec / 60))}分` : '', v.wpm ? `${v.wpm} WPM` : '', v.chapters ? `${v.chapters}チャプター` : ''].filter(Boolean).join(' · ')
       : (v.channel || '') + (v.publishedAt ? ` · ${ymd(new Date(v.publishedAt))}` : '');
     const inner = `<img loading="lazy" src="https://i.ytimg.com/vi/${esc(v.youtubeId)}/mqdefault.jpg" alt="">
       <div><div class="t">${esc(v.title || v.youtubeId)}</div>${v.titleJa ? `<div class="tj">${esc(v.titleJa)}</div>` : ''}
@@ -366,7 +371,9 @@ function bindTxField(el, optional) {
 // 文字起こしは URL に入る大きさに分けて、何回かに分けて送る（本文の欄へのペーストはしない）
 // iPhone はボタンを押してから時間のかかる処理をはさむと画面を開けないので、先に全部のリンクを作っておく
 function splitLines(text, n) {
-  const lines = text.split('\n'), size = text.length / n, out = [];
+  // 1行がとても長い時（改行のない文字起こし）は、空白のところで行を分けておく
+  const lines = text.split('\n').flatMap(l => l.length <= 2000 ? [l] : l.match(/[\s\S]{1,2000}(?:\s|$)|[\s\S]{1,2000}/g));
+  const size = text.length / n, out = [];
   let cur = [], len = 0;
   for (const l of lines) {
     if (len >= size * (out.length + 1) && out.length < n - 1 && cur.length) { out.push(cur.join('\n')); cur = []; }
@@ -380,8 +387,9 @@ async function transcriptLinks(v, text) {
   const base = { type: 'transcript', youtubeId: v.youtubeId, menu: v.menu, title: v.title || '' };
   for (let n = 1; n <= 30; n++) {
     const chunks = splitLines(text, n), links = [];
+    if (chunks.length < n) continue; // 長い行があって n 個に分けられない
     for (let i = 0; i < chunks.length; i++) {
-      const payload = n === 1 ? { ...base, text: chunks[i] } : { ...base, sid, part: i + 1, parts: n, text: chunks[i] };
+      const payload = n === 1 ? { ...base, text: chunks[i] } : { ...base, sid, part: i + 1, parts: chunks.length, text: chunks[i] };
       const title = n === 1 ? '文字起こし' : `文字起こし（${i + 1}/${n}）`;
       const url = issueUrl(title, issueBody(await sealZ(S.key, payload)));
       if (url.length > ISSUE_URL_MAX) break;
@@ -391,12 +399,21 @@ async function transcriptLinks(v, text) {
   }
   return null;
 }
-// 送る途中の文字起こしはiPhoneに保存しておく（GitHubから戻った時にアプリが読み込み直されても続きから送れる）
+// 送る途中の文字起こしはiPhoneに動画ごとに保存しておく（GitHubから戻った時にアプリが読み込み直されても続きから送れる）
+async function pendingAll() {
+  const p = (await idb.get('pendingTx')) || {};
+  return p.links ? { [p.v.youtubeId]: p } : p; // 以前の形（1本だけ）も読む
+}
+async function setPending(id, p) {
+  const all = await pendingAll();
+  if (p) all[id] = p; else delete all[id];
+  await idb.set('pendingTx', all);
+}
 async function sendTranscript(v, text) {
   const links = await transcriptLinks(v, text);
   if (!links) return openIssue('文字起こし', { type: 'transcript', youtubeId: v.youtubeId, menu: v.menu, title: v.title || '', text }, () => txSent(v));
   const p = { v: { youtubeId: v.youtubeId, menu: v.menu, title: v.title || '' }, links, opened: [], at: Date.now() };
-  await idb.set('pendingTx', p);
+  await setPending(v.youtubeId, p);
   txModal(p);
   return true;
 }
@@ -417,19 +434,21 @@ function txModal(p) {
     el.querySelectorAll('[data-part]').forEach(a => { a.onclick = () => {
       const i = Number(a.dataset.part);
       if (!p.opened.includes(i)) p.opened.push(i);
-      idb.set('pendingTx', p);
+      setPending(p.v.youtubeId, p);
       setTimeout(() => txModal(p), 400);
     }; });
     const d = el.querySelector('#done');
-    if (d) d.onclick = async () => { await idb.del('pendingTx'); closeModal(); txSent(p.v); };
-    el.querySelector('#cancel').onclick = async () => { await idb.del('pendingTx'); closeModal(); toast('送信をやめました。送る時は、もう一度アプリから送ってください', 4000); };
+    if (d) d.onclick = async () => { await setPending(p.v.youtubeId, null); closeModal(); await txSent(p.v); resumeTx(); };
+    el.querySelector('#cancel').onclick = async () => { await setPending(p.v.youtubeId, null); closeModal(); toast('送信をやめました。送る時は、もう一度アプリから送ってください', 4000); resumeTx(); };
   }, { sticky: true });
 }
+// 送信の途中の動画があれば、送信画面を開き直す（一覧などに移って閉じても、次に開いた時に戻る）
 async function resumeTx() {
-  const p = await idb.get('pendingTx');
-  if (!p) return;
-  if (Date.now() - p.at > 2 * 86400000) { await idb.del('pendingTx'); return; }
-  if ($('#modal').hidden) txModal(p);
+  const all = await pendingAll();
+  for (const [id, p] of Object.entries(all)) if (Date.now() - p.at > 2 * 86400000) delete all[id];
+  await idb.set('pendingTx', all);
+  const p = Object.values(all).sort((a, b) => b.at - a.at)[0];
+  if (p && $('#modal').hidden) txModal(p);
 }
 function pasteTranscript(v) {
   modal(`<h2>文字起こしを貼る</h2><p><b>${esc(v.title || v.youtubeId)}</b></p>
@@ -1089,7 +1108,7 @@ async function exportBackup() {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
-document.addEventListener('visibilitychange', () => { if (!document.hidden && S.key) updateBadge(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.key) { updateBadge(); resumeTx(); } });
 boot().catch(() => {
   $('#main').innerHTML = '<div class="card empty">アプリのデータを開けませんでした。プライベートブラウズを使っていないか確かめて、アプリを開き直してください。<br><br><button class="btn secondary" onclick="location.reload()">もう一度読み込む</button></div>';
 });
