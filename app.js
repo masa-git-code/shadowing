@@ -121,6 +121,7 @@ async function start() {
   // 一覧を描き直すだけにする（開いている入力画面は閉じない）
   loadCatalog().then(() => { const m = location.hash.match(/^#\/(chloe|ted)$/); if (m) renderList(m[1]); });
   importInbox();
+  resumeTx();
 }
 
 function renderLogin(errMsg = '') {
@@ -390,29 +391,45 @@ async function transcriptLinks(v, text) {
   }
   return null;
 }
+// 送る途中の文字起こしはiPhoneに保存しておく（GitHubから戻った時にアプリが読み込み直されても続きから送れる）
 async function sendTranscript(v, text) {
-  const done = async () => {
-    S.localTx[v.youtubeId] = Date.now(); await idb.set('localTx', S.localTx);
-    toast(`${prepWhen()}7時ごろ、Claudeが訳とチャプターをつけて準備します`, 4500);
-    if (MENUS[location.hash.split('/')[1]]) route();
-  };
   const links = await transcriptLinks(v, text);
-  if (!links) return openIssue('文字起こし', { type: 'transcript', youtubeId: v.youtubeId, menu: v.menu, title: v.title || '', text }, done);
-  const step = i => {
-    const n = links.length, l = links[i];
-    modal(`<h2>GitHubで送信${n > 1 ? `（${i + 1}/${n}回目）` : ''}</h2>
-      ${n > 1 ? `<p>文字起こしが長いので、<b>${n}回に分けて</b>送ります。1回ごとにGitHubが開くので、そのたびに送信してアプリに戻ってください。</p>` : ''}
-      <p>下のボタンでGitHubが開きます。中身は入っているので、画面の<b>いちばん下の緑のボタン</b>（「Create」または「Submit new issue」）を押すだけです。</p>
-      <a class="btn block" id="ghLink" href="${esc(l.url)}" target="_blank" rel="noopener">GitHubを開く${n > 1 ? `（${i + 1}/${n}）` : ''}</a>
-      <p class="muted">GitHubのログイン画面が出たら、ログインしてから、もう一度アプリからやり直してください。</p>
-      <button class="btn ghost block" id="cancel">やめる</button>`, el => {
-      el.querySelector('#ghLink').onclick = () => setTimeout(() => confirmSent(() => i + 1 < n ? step(i + 1) : done(),
-        n > 1 && i > 0 ? `${i}/${n}回目まで送りました。続きを送る時は、もう一度アプリから最初から送ってください` : null), 400);
-      el.querySelector('#cancel').onclick = closeModal;
-    }, { sticky: true });
-  };
-  step(0);
+  if (!links) return openIssue('文字起こし', { type: 'transcript', youtubeId: v.youtubeId, menu: v.menu, title: v.title || '', text }, () => txSent(v));
+  const p = { v: { youtubeId: v.youtubeId, menu: v.menu, title: v.title || '' }, links, opened: [], at: Date.now() };
+  await idb.set('pendingTx', p);
+  txModal(p);
   return true;
+}
+async function txSent(v) {
+  S.localTx[v.youtubeId] = Date.now(); await idb.set('localTx', S.localTx);
+  toast(`${prepWhen()}7時ごろ、Claudeが訳とチャプターをつけて準備します`, 4500);
+  if (MENUS[location.hash.split('/')[1]]) route();
+}
+function txModal(p) {
+  const n = p.links.length, next = p.links.findIndex((_, i) => !p.opened.includes(i));
+  modal(`<h2>GitHubで送信</h2><p><b>${esc(p.v.title || p.v.youtubeId)}</b></p>
+    <p>${n > 1 ? `文字起こしが長いので、<b>${n}回に分けて</b>送ります。上から順に` : '下の'}ボタンを押すとGitHubが開きます。中身は入っているので、画面の<b>いちばん下の緑のボタン</b>（「Create」または「Submit new issue」）を押して、アプリに戻ってください。</p>
+    ${p.links.map((l, i) => `<a class="btn block ${p.opened.includes(i) ? 'secondary' : ''}" data-part="${i}" href="${esc(l.url)}" target="_blank" rel="noopener" style="margin-top:8px">${p.opened.includes(i) ? '✓ ' : ''}GitHubを開く${n > 1 ? `（${i + 1}/${n}）` : ''}</a>`).join('')}
+    ${next < 0 ? `<p style="margin-top:14px">全部${n > 1 ? `（${n}回）` : ''}緑のボタンを押して送信できたら、「送信した」を押してください。送れなかった回は、もう一度そのボタンから送れます。</p>
+      <button class="btn block" id="done" style="margin-top:8px">送信した</button>` : ''}
+    <p class="muted">GitHubのログイン画面が出たら、ログインしてから同じボタンをもう一度押してください。</p>
+    <button class="btn ghost block" id="cancel">やめる</button>`, el => {
+    el.querySelectorAll('[data-part]').forEach(a => { a.onclick = () => {
+      const i = Number(a.dataset.part);
+      if (!p.opened.includes(i)) p.opened.push(i);
+      idb.set('pendingTx', p);
+      setTimeout(() => txModal(p), 400);
+    }; });
+    const d = el.querySelector('#done');
+    if (d) d.onclick = async () => { await idb.del('pendingTx'); closeModal(); txSent(p.v); };
+    el.querySelector('#cancel').onclick = async () => { await idb.del('pendingTx'); closeModal(); toast('送信をやめました。送る時は、もう一度アプリから送ってください', 4000); };
+  }, { sticky: true });
+}
+async function resumeTx() {
+  const p = await idb.get('pendingTx');
+  if (!p) return;
+  if (Date.now() - p.at > 2 * 86400000) { await idb.del('pendingTx'); return; }
+  if ($('#modal').hidden) txModal(p);
 }
 function pasteTranscript(v) {
   modal(`<h2>文字起こしを貼る</h2><p><b>${esc(v.title || v.youtubeId)}</b></p>
