@@ -12,11 +12,15 @@ const spoken = /^(\d+\s*(時間|分|秒)\s*)+|^(\d+ (hours?|minutes?|seconds?),?
 const decode = t => t.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 if (lines.some(l => /-->/.test(l))) { console.error('VTT/SRT 形式です。YouTube の「文字起こしを表示」からコピーした文字を使ってください'); process.exit(1); }
 const segs = [];
-for (const l of lines) {
+// 次の時刻の行（本文ではなさそうなもの）の秒数
+const nextTime = i => { for (let j = i + 1; j < lines.length; j++) { const m = !junk.test(lines[j]) && lines[j].match(timeRe); if (m) return toSec(m[1]); } return null; };
+for (const [i, l] of lines.entries()) {
   if (junk.test(l)) continue;
   const m = l.match(timeRe);
-  // 時刻が前に戻る行（「2:30 in the morning」のような本文）は前の断片の続きとして扱う
-  if (m && segs.length && toSec(m[1]) < segs.at(-1).start) { segs.at(-1).text = (segs.at(-1).text + ' ' + decode(l)).trim(); continue; }
+  // 時刻が前に戻る行や、急に先へ飛んで次の時刻でまた戻る行（「2:30 in the morning」のような本文）は前の断片の続きとして扱う
+  const prev = segs.at(-1)?.start;
+  const asText = m && segs.length && (toSec(m[1]) < prev || (toSec(m[1]) > prev + 60 && (nextTime(i) ?? Infinity) <= prev + 60));
+  if (asText) { segs.at(-1).text = (segs.at(-1).text + ' ' + decode(l)).trim(); continue; }
   if (m) segs.push({ start: toSec(m[1]), text: decode((m[2] || '').replace(spoken, '')).trim() });
   else if (segs.length) segs.at(-1).text = (segs.at(-1).text + ' ' + decode(l)).trim();
 }
